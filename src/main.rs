@@ -113,42 +113,75 @@ fn hann_window(n: usize) -> Vec<f32> {
         .collect()
 }
 
-fn bucket_log(
-    freqs: &[f32],
-    mags: &[f32],
+#[derive(Clone)]
+struct BarBins {
+    start: usize,
+    end: usize, // exclusive
+}
+
+/// Build log-spaced mapping from bars to FFT bin ranges.
+fn make_bar_bins(
+    sr: f32,
+    fft_size: usize,
     bars: usize,
     fmin: f32,
     fmax: f32,
-) -> Vec<f32> {
-    let mut out = vec![0.0; bars];
+) -> Vec<BarBins> {
+    let half = fft_size / 2;
+    let hz_per_bin = sr / fft_size as f32;
+
     let log_min = fmin.ln();
     let log_max = fmax.ln();
-    for (i, &f) in freqs.iter().enumerate() {
-        if f < fmin || f > fmax {
-            continue;
+    let mut bins = Vec::with_capacity(bars);
+
+    for b in 0..bars {
+        let t0 = b as f32 / bars as f32;
+        let t1 = (b + 1) as f32 / bars as f32;
+        let f0 = (log_min + t0 * (log_max - log_min)).exp();
+        let f1 = (log_min + t1 * (log_max - log_min)).exp();
+        let mut i0 =
+            ((f0 / hz_per_bin).floor() as isize).max(1) as usize;
+        let mut i1 =
+            ((f1 / hz_per_bin).ceil() as isize).max(2) as usize;
+        if i0 >= half {
+            i0 = half - 1;
         }
-        let t = ((f.ln() - log_min) / (log_max - log_min))
-            .clamp(0.0, 0.999_999);
-        let b = (t * bars as f32) as usize;
-        if b < bars {
-            out[b] = f32::max(out[b], mags[i]);
+        if i1 > half {
+            i1 = half;
         }
+        if i1 <= i0 {
+            i1 = i0 + 1;
+        }
+        bins.push(BarBins { start: i0, end: i1 });
     }
-    out
+    bins
+}
+
+/// RMS in a bin range with a tiny DC guard.
+fn bucket_rms(spec: &[f32], start: usize, end: usize) -> f32 {
+    let mut sum = 0.0f32;
+    let mut n = 0usize;
+    for i in start..end {
+        let v = spec[i];
+        sum += v * v;
+        n += 1;
+    }
+    let rms = if n > 0 { (sum / n as f32).sqrt() } else { 0.0 };
+    // avoid log blowups downstream
+    rms.max(1e-8)
 }
 
 fn draw_frame(
     out: &mut Stdout,
     bars: &[f32],
+    peaks: &[f32],
     w: u16,
     h: u16,
 ) -> std::io::Result<()> {
     let bar_count = min(bars.len() as u16, w.saturating_sub(2));
     let max_h = h.saturating_sub(2);
 
-    // Draw starting on line 1 so the header on line 0 stays visible.
     execute!(out, cursor::MoveTo(0, 1))?;
-
     let mut buf = String::with_capacity(
         ((bar_count as usize) + 3) * ((max_h as usize) + 3),
     );
@@ -158,7 +191,14 @@ fn draw_frame(
         for i in 0..bar_count {
             let v = bars[i as usize].clamp(0.0, 1.0);
             let filled = (v * max_h as f32).round() as u16;
-            if filled > row {
+            // Peak dot one row above the fill
+            let peak_row = (peaks[i as usize].clamp(0.0, 1.0)
+                * max_h as f32)
+                .round() as i32;
+
+            if (row as i32) == peak_row {
+                buf.push('▪');
+            } else if filled > row {
                 buf.push('█');
             } else {
                 buf.push(' ');
@@ -178,6 +218,18 @@ fn draw_frame(
 }
 
 fn main() -> Result<()> {
+    // Look and feel
+    const FMIN: f32 = 25.0;
+    const FMAX: f32 = 16_000.0;
+    const TARGET_FPS_MS: u64 = 16; // ~60 fps
+    const FFT_SIZE: usize = 2048; // more resolution than 1024
+    const SPEC_EMA: f32 = 0.7; // spectral smoothing (higher = smoother)
+    const BAR_ATTACK: f32 = 0.6; // bar smoothing attack
+    const BAR_DECAY: f32 = 0.85; // bar decay per frame
+    const PEAK_DECAY: f32 = 0.96; // peak gravity
+    const NORM_EMA: f32 = 0.92; // normalization max smoothing
+    const FLOOR_FRAC: f32 = 0.06; // noise floor as fraction of max
+
     let mut out = stdout();
     terminal::enable_raw_mode()?;
     execute!(
@@ -198,12 +250,13 @@ fn main() -> Result<()> {
         let _ = terminal::disable_raw_mode();
     });
 
+    // Audio
     let device = pick_input_device()?;
     let name = device.name().unwrap_or_else(|_| "<unknown>".into());
     let cfg = best_config_for(&device)?;
     let sample_rate = cfg.sample_rate.0 as f32;
 
-    let ring_len = (sample_rate as usize / 10).max(2048);
+    let ring_len = (sample_rate as usize / 10).max(FFT_SIZE * 2);
     let shared = Arc::new(Mutex::new(SharedBuf::new(ring_len)));
 
     let stream = match device.default_input_config()?.sample_format()
@@ -221,15 +274,20 @@ fn main() -> Result<()> {
     };
     stream.play()?;
 
-    let fft_size = 1024usize;
-    let window = hann_window(fft_size);
+    // FFT
+    let window = hann_window(FFT_SIZE);
     let mut planner = FftPlanner::<f32>::new();
-    let fft = planner.plan_fft_forward(fft_size);
+    let fft = planner.plan_fft_forward(FFT_SIZE);
+    let half = FFT_SIZE / 2;
 
+    // State
     let mut last = Instant::now();
-    let target_dt = Duration::from_millis(16);
-    let mut smoothed: Vec<f32> = vec![0.0; 120];
-    let decay = 0.88f32;
+    let target_dt = Duration::from_millis(TARGET_FPS_MS);
+    let mut spec_smooth: Vec<f32> = vec![0.0; half]; // EMA on spectrum
+    let mut bars_state: Vec<f32> = Vec::new();
+    let mut peaks: Vec<f32> = Vec::new();
+    let mut bar_bins: Vec<BarBins> = Vec::new();
+    let mut norm_max = 0.1f32;
 
     loop {
         if crossterm::event::poll(Duration::from_millis(0))? {
@@ -244,17 +302,18 @@ fn main() -> Result<()> {
 
         let now = Instant::now();
         if now.duration_since(last) < target_dt {
-            thread::sleep(Duration::from_millis(2));
+            thread::sleep(Duration::from_millis(1));
             continue;
         }
         last = now;
 
         let samples = { shared.lock().unwrap().latest() };
-        if samples.len() < fft_size {
+        if samples.len() < FFT_SIZE {
             continue;
         }
 
-        let tail = &samples[samples.len() - fft_size..];
+        // Take FFT of the latest window
+        let tail = &samples[samples.len() - FFT_SIZE..];
         let mut buf: Vec<Complex<f32>> = tail
             .iter()
             .zip(window.iter())
@@ -262,37 +321,75 @@ fn main() -> Result<()> {
             .collect();
         fft.process(&mut buf);
 
-        let half = fft_size / 2;
-        let mags: Vec<f32> = buf[..half]
-            .iter()
-            .map(|c| (c.norm() / fft_size as f32).powf(0.35))
-            .collect();
+        // Magnitude spectrum and EMA smoothing
+        for i in 0..half {
+            let mag = (buf[i].re * buf[i].re + buf[i].im * buf[i].im)
+                .sqrt()
+                / FFT_SIZE as f32;
+            spec_smooth[i] = SPEC_EMA * spec_smooth[i]
+                + (1.0 - SPEC_EMA) * mag.max(1e-9);
+        }
 
-        let freqs: Vec<f32> = (0..half)
-            .map(|i| i as f32 * sample_rate / fft_size as f32)
-            .collect();
-
+        // Bars layout depends on terminal width
         let (w, h) = terminal::size()?;
         let bars = (w.saturating_sub(2)).max(10) as usize;
 
-        let mut bar_vals =
-            bucket_log(&freqs, &mags, bars, 30.0, 16_000.0);
-
-        let maxv = bar_vals.iter().cloned().fold(0.0001f32, f32::max);
-        for v in &mut bar_vals {
-            *v = (*v / maxv).clamp(0.0, 1.0);
+        if bar_bins.len() != bars {
+            bar_bins = make_bar_bins(
+                sample_rate,
+                FFT_SIZE,
+                bars,
+                FMIN,
+                FMAX,
+            );
+            bars_state = vec![0.0; bars];
+            peaks = vec![0.0; bars];
         }
 
-        if smoothed.len() != bars {
-            smoothed = vec![0.0; bars];
+        // Bucket with RMS
+        let mut bar_vals = vec![0.0f32; bars];
+        for (i, bb) in bar_bins.iter().enumerate() {
+            bar_vals[i] = bucket_rms(&spec_smooth, bb.start, bb.end);
         }
+
+        // Gentle spatial smoothing across neighbors
+        if bars >= 3 {
+            let mut tmp = bar_vals.clone();
+            for i in 1..bars - 1 {
+                tmp[i] = 0.25 * bar_vals[i - 1]
+                    + 0.5 * bar_vals[i]
+                    + 0.25 * bar_vals[i + 1];
+            }
+            bar_vals = tmp;
+        }
+
+        // Stable normalization with EMA of max and a small floor
+        let frame_max =
+            bar_vals.iter().cloned().fold(0.0f32, f32::max);
+        norm_max = NORM_EMA * norm_max
+            + (1.0 - NORM_EMA) * frame_max.max(1e-6);
+        let floor = norm_max * FLOOR_FRAC;
+
+        // Bar envelope with attack/decay and peak hold
         for i in 0..bars {
-            smoothed[i] *= decay;
-            if bar_vals[i] > smoothed[i] {
-                smoothed[i] = bar_vals[i];
+            let v = ((bar_vals[i] - floor) / (norm_max - floor))
+                .clamp(0.0, 1.0);
+            if v > bars_state[i] {
+                bars_state[i] = BAR_ATTACK * bars_state[i]
+                    + (1.0 - BAR_ATTACK) * v;
+            } else {
+                bars_state[i] *= BAR_DECAY;
+                if v > bars_state[i] {
+                    bars_state[i] = v;
+                }
+            }
+            peaks[i] *= PEAK_DECAY;
+            if bars_state[i] > peaks[i] {
+                peaks[i] = bars_state[i];
             }
         }
 
+        // Draw
         execute!(out, terminal::Clear(ClearType::All))?;
         {
             let header = format!(
@@ -302,7 +399,7 @@ fn main() -> Result<()> {
             out.write_all(header.as_bytes())?;
             out.flush()?;
         }
-        draw_frame(&mut out, &smoothed, w, h)?;
+        draw_frame(&mut out, &bars_state, &peaks, w, h)?;
     }
 
     drop(cleanup);
