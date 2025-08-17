@@ -368,8 +368,6 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-/* =========================== Scopeguard =========================== */
-
 mod scopeguard {
     pub fn guard<T, F: FnOnce(T)>(v: T, f: F) -> Guard<T, F> { Guard { v: Some(v), f: Some(f) } }
     pub struct Guard<T, F: FnOnce(T)> { v: Option<T>, f: Option<F> }
