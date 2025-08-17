@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use cpal::traits::{DeviceTrait, HostTrait};
 use cpal::{Device, Sample, SizedSample, StreamConfig};
 use rustfft::num_traits::ToPrimitive;
 
