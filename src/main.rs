@@ -77,8 +77,9 @@ where T: Sample + SizedSample + ToPrimitive {
 
 /* ====================== DSP: window + filterbank =================== */
 fn hann(n: usize) -> Vec<f32> {
-    let nf = n as f32;
-    (0..n).map(|i| 0.5 - 0.5 * f32::cos(2.0 * std::f32::consts::PI * i as f32 / nf)).collect()
+    // standard Hann with n-1 in the denominator
+    let den = (n.max(2) - 1) as f32;
+    (0..n).map(|i| 0.5 - 0.5 * f32::cos(2.0 * std::f32::consts::PI * i as f32 / den)).collect()
 }
 
 #[derive(Clone)]
@@ -135,64 +136,61 @@ fn build_filterbank(sr: f32, fft_size: usize, bands: usize, fmin: f32, fmax: f32
     filters
 }
 
-/* ============================ Layout/Drawing ======================= */
-struct Layout { bars: usize, bar_w: u16, gap: u16, left_pad: u16 }
-fn compute_layout(w: u16) -> Layout {
-    // aim to FILL the width, with 0–1 gap, 2–3 width
-    let max_bar_w = 3u16;
-    let min_bar_w = 2u16;
-    let mut bar_w = max_bar_w;
-    let mut gap = 1u16;
-    let margin = 2u16;
-
-    loop {
-        let avail = w.saturating_sub(margin);
-        let stride = bar_w + gap;
-        let bars_fit = if stride == 0 { 1 } else { (avail / stride).max(1) } as usize;
-
-        let used = bars_fit as u16 * stride - gap; // last bar no gap
-        if used + margin <= w {
-            let left_pad = (w - used) / 2;
-            return Layout { bars: bars_fit.max(32), bar_w, gap, left_pad };
-        }
-
-        if gap > 0 { gap -= 1; continue; }
-        if bar_w > min_bar_w { bar_w -= 1; gap = 1; continue; }
-
-        // worst case tiny terminal
-        let stride = 1u16;
-        let bars_fit = (avail / stride).max(1) as usize;
-        let used = bars_fit as u16 * stride;
-        let left_pad = (w - used) / 2;
-        return Layout { bars: bars_fit, bar_w: 1, gap: 0, left_pad };
-    }
+/* ============================ Braille draw ========================= */
+// Each char has 8 vertical dots. Order bottom to top: 7,8,3,6,2,5,1,4.
+fn braille_from_bottom_dots(n: u8) -> char {
+    if n == 0 { return ' '; }
+    let order = [0x40u16, 0x80, 0x04, 0x20, 0x02, 0x10, 0x01, 0x08];
+    let mut bits: u16 = 0;
+    for i in 0..n.min(8) as usize { bits |= order[i]; }
+    char::from_u32(0x2800 + bits as u32).unwrap()
 }
 
-fn draw_frame(out: &mut Stdout, bars: &[f32], w: u16, h: u16, lay: &Layout) -> std::io::Result<()> {
-    let max_h = h.saturating_sub(3);
+struct Layout { bars: usize, gap: u16, left_pad: u16 }
+fn compute_layout(w: u16) -> Layout {
+    let margin = 2u16;
+    let gap = 1u16;
+    let avail = w.saturating_sub(margin);
+    let stride = 1 + gap; // 1 braille column + gap
+    let bars_fit = (avail / stride).max(10) as usize;
+    let used = bars_fit as u16 * stride - gap;
+    let left_pad = w.saturating_sub(used) / 2;
+    Layout { bars: bars_fit, gap, left_pad }
+}
+
+fn draw_braille(out: &mut Stdout, bars: &[f32], w: u16, h: u16, lay: &Layout) -> std::io::Result<()> {
+    let rows = h.saturating_sub(3) as usize; // leave space for header and baseline
+    if rows == 0 { return Ok(()); }
+
     queue!(out, cursor::MoveTo(0, 1))?;
 
-    for row_top in (0..max_h).rev() {
-        let rb = max_h - 1 - row_top; // row index from bottom
+    // Build each line once, top to bottom
+    for row_top in 0..rows {
         let mut line = String::with_capacity(w as usize);
-        let mut cols: u16 = 0;
+        for _ in 0..lay.left_pad { line.push(' '); }
 
-        // left padding
-        for _ in 0..lay.left_pad { line.push(' '); cols += 1; }
+        // this row index from top; convert to how many dots remain at this row
+        let row_from_bottom = rows - 1 - row_top;
 
         for i in 0..lay.bars.min(bars.len()) {
             let v = bars[i].clamp(0.0, 1.0);
-            let filled = (v * max_h as f32).round() as u16;
+            let total_dots = (v * (rows as f32 * 8.0)).round() as i32;
+            let rem = total_dots - (row_from_bottom as i32) * 8;
 
-            // bar block(s)
-            for _ in 0..lay.bar_w {
-                if filled > rb { line.push('█'); } else { line.push(' '); }
-                cols += 1;
-            }
-            for _ in 0..lay.gap { line.push(' '); cols += 1; }
+            let ch = if rem >= 8 {
+                '\u{28FF}' // full cell
+            } else if rem > 0 {
+                braille_from_bottom_dots(rem as u8)
+            } else {
+                ' '
+            };
+            line.push(ch);
+
+            for _ in 0..lay.gap { line.push(' '); }
         }
 
-        while cols < w { line.push(' '); cols += 1; }
+        // pad to screen width
+        while line.chars().count() < w as usize { line.push(' '); }
         line.push('\n');
         out.write_all(line.as_bytes())?;
     }
@@ -215,12 +213,12 @@ fn main() -> Result<()> {
     const FFT_SIZE: usize = 2048;
 
     // motion/shape
-    const SPEC_EMA: f32 = 0.82;   // smoother spectrum
-    const BAR_ATTACK: f32 = 0.42; // fast rise
-    const BAR_DECAY: f32 = 0.94;  // gentle fall = smoother motion
-    const NORM_EMA: f32 = 0.94;   // stable auto-gain
-    const LOG_COMP: f32 = 190.0;  // log compression
-    const FLOOR_FRAC: f32 = 0.05; // noise floor
+    const SPEC_EMA: f32 = 0.85;
+    const BAR_ATTACK: f32 = 0.40;
+    const BAR_DECAY: f32 = 0.93;
+    const NORM_EMA: f32 = 0.95;
+    const LOG_COMP: f32 = 180.0;
+    const FLOOR_FRAC: f32 = 0.05;
 
     // gate
     const SILENCE_DB: f32 = -60.0;
@@ -320,7 +318,7 @@ fn main() -> Result<()> {
             bar_vals[i] = if gate_open { v } else { 0.0 };
         }
 
-        // Gaussian 7-tap spatial smoothing
+        // 7-tap spatial smoothing
         if lay.bars >= 7 {
             let k = [1.0f32, 6.0, 15.0, 20.0, 15.0, 6.0, 1.0];
             let mut sm = vec![0.0f32; lay.bars];
@@ -353,11 +351,11 @@ fn main() -> Result<()> {
             }
         }
 
-        // draw
+        // draw (Braille)
         queue!(out, terminal::Clear(ClearType::All), cursor::MoveTo(0, 0), SetForegroundColor(Color::White))?;
         let header = format!("  mycava  |  input: {}  |  q quits\n", name);
         out.write_all(header.as_bytes())?;
-        draw_frame(&mut out, &bars_state, w, h, &lay)?;
+        draw_braille(&mut out, &bars_state, w, h, &lay)?;
     }
 
     Ok(())
