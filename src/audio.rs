@@ -8,15 +8,19 @@ use std::sync::{Arc, Mutex};
 
 pub fn pick_input_device() -> Result<Device> {
     let host = cpal::default_host();
-    for dev in host.input_devices()? {
-        let name = dev
-            .name()
-            .unwrap_or_else(|_| String::new())
-            .to_lowercase();
-        if name.contains("monitor") {
-            return Ok(dev);
+    
+    // First try to find a monitor device
+    if let Ok(devices) = host.input_devices() {
+        for dev in devices {
+            if let Ok(name) = dev.name() {
+                if name.to_lowercase().contains("monitor") {
+                    return Ok(dev);
+                }
+            }
         }
     }
+    
+    // Fall back to default device
     host.default_input_device()
         .context("No default input device")
 }
@@ -37,20 +41,25 @@ where
 {
     let ch = cfg.channels as usize;
     let err_fn = |e| eprintln!("Stream error: {}", e);
+    
     let stream = device.build_input_stream(
         &cfg,
         move |data: &[T], _| {
-            let mut buf = shared.lock().unwrap();
-            for frame in data.chunks_exact(ch) {
-                let mut acc = 0.0f32;
-                for &s in frame {
-                    acc += s.to_f32().unwrap_or(0.0);
+            // Try to acquire lock, skip if busy
+            if let Ok(mut buf) = shared.try_lock() {
+                let frames = data.chunks_exact(ch);
+                for frame in frames {
+                    let mut acc = 0.0f32;
+                    for &s in frame {
+                        acc += s.to_f32().unwrap_or(0.0);
+                    }
+                    buf.push(acc / ch as f32);
                 }
-                buf.push(acc / ch as f32);
             }
         },
         err_fn,
         None,
     )?;
+    
     Ok(stream)
 }

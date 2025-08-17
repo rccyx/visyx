@@ -12,9 +12,9 @@ pub mod scopeguard {
     }
 
     impl<T, F: FnOnce(T)> Drop for Guard<T, F> {
+        #[inline]
         fn drop(&mut self) {
-            if let (Some(v), Some(f)) = (self.v.take(), self.f.take())
-            {
+            if let (Some(v), Some(f)) = (self.v.take(), self.f.take()) {
                 f(v);
             }
         }

@@ -27,7 +27,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-// Helper function to get environment variable as a specific type with default fallback
+#[inline]
 fn get_env<T: std::str::FromStr>(name: &str, default: T) -> T {
     match env::var(name) {
         Ok(val) => val.parse::<T>().unwrap_or(default),
@@ -41,14 +41,14 @@ fn main() -> Result<()> {
     let fmax: f32 = get_env("LOOKAS_FMAX", 16_000.0);
     let target_fps_ms: u64 = get_env("LOOKAS_TARGET_FPS_MS", 16);
     let fft_size: usize = get_env("LOOKAS_FFT_SIZE", 2048);
-    let tau_spec: f32 = get_env("LOOKAS_TAU_SPEC", 0.06); // spectrum smoothing
-    let gate_db: f32 = get_env("LOOKAS_GATE_DB", -55.0); // ignore room hiss
-    let tilt_alpha: f32 = get_env("LOOKAS_TILT_ALPHA", 0.30); // reduce low end dominance
-    let flow_k: f32 = get_env("LOOKAS_FLOW_K", 0.18); // lateral energy flow
-    let spr_k: f32 = get_env("LOOKAS_SPR_K", 60.0); // spring to keep motion smooth
+    let tau_spec: f32 = get_env("LOOKAS_TAU_SPEC", 0.06);
+    let gate_db: f32 = get_env("LOOKAS_GATE_DB", -55.0);
+    let tilt_alpha: f32 = get_env("LOOKAS_TILT_ALPHA", 0.30);
+    let flow_k: f32 = get_env("LOOKAS_FLOW_K", 0.18);
+    let spr_k: f32 = get_env("LOOKAS_SPR_K", 60.0);
     let spr_zeta: f32 = get_env("LOOKAS_SPR_ZETA", 1.0);
 
-    // TUI
+    // TUI setup
     let mut out = stdout();
     terminal::enable_raw_mode()?;
     execute!(
@@ -58,6 +58,7 @@ fn main() -> Result<()> {
         terminal::Clear(ClearType::All),
         SetForegroundColor(Color::White),
     )?;
+    
     let _cleanup = scopeguard::guard((), |_| {
         let mut out = stdout();
         let _ = execute!(
@@ -68,7 +69,7 @@ fn main() -> Result<()> {
         let _ = terminal::disable_raw_mode();
     });
 
-    // Audio
+    // Audio setup
     let device = pick_input_device()?;
     let name = device.name().unwrap_or_else(|_| "<unknown>".into());
     let cfg = best_config_for(&device)?;
@@ -76,40 +77,36 @@ fn main() -> Result<()> {
 
     let ring_len = (sr as usize / 10).max(fft_size * 3);
     let shared = Arc::new(Mutex::new(SharedBuf::new(ring_len)));
-    let stream = match device.default_input_config()?.sample_format()
-    {
-        SampleFormat::F32 => {
-            build_stream::<f32>(device, cfg.clone(), shared.clone())?
-        }
-        SampleFormat::I16 => {
-            build_stream::<i16>(device, cfg.clone(), shared.clone())?
-        }
-        SampleFormat::U16 => {
-            build_stream::<u16>(device, cfg.clone(), shared.clone())?
-        }
+    
+    let stream = match device.default_input_config()?.sample_format() {
+        SampleFormat::F32 => build_stream::<f32>(device, cfg.clone(), shared.clone())?,
+        SampleFormat::I16 => build_stream::<i16>(device, cfg.clone(), shared.clone())?,
+        SampleFormat::U16 => build_stream::<u16>(device, cfg.clone(), shared.clone())?,
         _ => anyhow::bail!("Unsupported sample format"),
     };
     stream.play()?;
 
-    // FFT
+    // FFT setup
     let window = hann(fft_size);
     let mut planner = FftPlanner::<f32>::new();
     let fft = planner.plan_fft_forward(fft_size);
     let half = fft_size / 2;
 
-    // State
+    // State initialization
     let mut last = Instant::now();
     let target_dt = Duration::from_millis(target_fps_ms);
     let mut analyzer = SpectrumAnalyzer::new(half);
-
-    // Animation state
     let mut orient = Orient::Vertical;
+    
+    // Pre-allocate buffers
+    let mut buf = Vec::with_capacity(fft_size);
+    let mut spec_pow = vec![0.0; half];
+    let mut header = String::with_capacity(200);
 
     loop {
+        // Handle user input
         if crossterm::event::poll(Duration::from_millis(0))? {
-            if let crossterm::event::Event::Key(k) =
-                crossterm::event::read()?
-            {
+            if let crossterm::event::Event::Key(k) = crossterm::event::read()? {
                 use crossterm::event::KeyCode::*;
                 match k.code {
                     Char('q') => return Ok(()),
@@ -120,6 +117,7 @@ fn main() -> Result<()> {
             }
         }
 
+        // Frame timing
         let now = Instant::now();
         let dt = now.duration_since(last);
         if dt < target_dt {
@@ -129,6 +127,7 @@ fn main() -> Result<()> {
         let dt_s = dt.as_secs_f32();
         last = now;
 
+        // Layout calculation
         let (w, h) = terminal::size()?;
         let lay = layout_for(w, h, orient);
         let desired_bars = match orient {
@@ -136,6 +135,7 @@ fn main() -> Result<()> {
             Orient::Horizontal => h.saturating_sub(3) as usize,
         };
 
+        // Update filters if needed
         if analyzer.filters.len() != desired_bars {
             analyzer.filters = build_filterbank(
                 sr,
@@ -147,33 +147,43 @@ fn main() -> Result<()> {
             analyzer.resize(desired_bars);
         }
 
-        let samples = { shared.lock().unwrap().latest() };
+        // Get audio samples
+        let samples = if let Ok(buf) = shared.try_lock() {
+            buf.latest()
+        } else {
+            continue;
+        };
+        
         if samples.len() < fft_size {
             continue;
         }
+        
         let tail = &samples[samples.len() - fft_size..];
 
-        // gate on room noise
-        let rms =
-            tail.iter().map(|x| x * x).sum::<f32>() / fft_size as f32;
+        // Calculate RMS and apply gate
+        let mut rms = 0.0;
+        for &x in tail {
+            rms += x * x;
+        }
+        rms /= fft_size as f32;
         let rms_db = 10.0 * (rms.max(1e-12)).log10();
         let gate_open = rms_db > gate_db;
 
-        let mut buf = prepare_fft_input(tail, &window);
+        // FFT processing
+        buf.clear();
+        buf = prepare_fft_input(tail, &window);
         fft.process(&mut buf);
 
         // Calculate power spectrum
-        let mut spec_pow = vec![0.0; half];
         for i in 0..half {
             let re = buf[i].re;
             let im = buf[i].im;
-            spec_pow[i] = (re * re + im * im)
-                / (fft_size as f32 * fft_size as f32);
+            spec_pow[i] = (re * re + im * im) / (fft_size as f32 * fft_size as f32);
         }
 
+        // Analyze spectrum
         analyzer.update_spectrum(&spec_pow, tau_spec, dt_s);
-        let bars_target =
-            analyzer.analyze_bands(tilt_alpha, dt_s, gate_open);
+        let bars_target = analyzer.analyze_bands(tilt_alpha, dt_s, gate_open);
         analyzer.apply_flow_and_spring(
             &bars_target,
             flow_k,
@@ -182,18 +192,28 @@ fn main() -> Result<()> {
             dt_s,
         );
 
+        // Render UI
         queue!(
             out,
             terminal::Clear(ClearType::All),
             cursor::MoveTo(0, 0),
             SetForegroundColor(Color::White)
         )?;
-        let header = format!(
-            "  lookas  |  input: {}  |  orient: {}  |  auto gain window [{:.1} dB .. {:.1} dB]  |  v/h to switch, q quits\n",
-            name,
-            match orient { Orient::Vertical => "vertical", Orient::Horizontal => "horizontal" },
-            analyzer.db_low - 3.0, analyzer.db_high + 6.0
-        );
+        
+        header.clear();
+        header.push_str("  lookas  |  input: ");
+        header.push_str(&name);
+        header.push_str("  |  orient: ");
+        header.push_str(match orient {
+            Orient::Vertical => "vertical",
+            Orient::Horizontal => "horizontal",
+        });
+        header.push_str("  |  auto gain window [");
+        
+        use std::fmt::Write;
+        let _ = write!(header, "{:.1} dB .. {:.1} dB", analyzer.db_low - 3.0, analyzer.db_high + 6.0);
+        header.push_str("]  |  v/h to switch, q quits\n");
+        
         out.write_all(header.as_bytes())?;
 
         match orient {

@@ -24,6 +24,7 @@ impl SpectrumAnalyzer {
         }
     }
 
+    #[inline]
     pub fn resize(&mut self, num_bars: usize) {
         if self.bars_y.len() != num_bars {
             self.bars_y = vec![0.0; num_bars];
@@ -38,14 +39,11 @@ impl SpectrumAnalyzer {
         tau_spec: f32,
         dt_s: f32,
     ) {
-        for (i, &pow) in spec_pow
-            .iter()
-            .enumerate()
-            .take(self.spec_pow_smooth.len().min(spec_pow.len()))
-        {
+        let len = self.spec_pow_smooth.len().min(spec_pow.len());
+        for i in 0..len {
             self.spec_pow_smooth[i] = ema_tc(
                 self.spec_pow_smooth[i],
-                pow.max(1e-12),
+                spec_pow[i].max(1e-12),
                 tau_spec,
                 dt_s,
             );
@@ -58,7 +56,8 @@ impl SpectrumAnalyzer {
         dt_s: f32,
         gate_open: bool,
     ) -> Vec<f32> {
-        let mut db_per_band = vec![0.0f32; self.filters.len()];
+        let filters_len = self.filters.len();
+        let mut db_per_band = vec![0.0f32; filters_len];
 
         for (i, tri) in self.filters.iter().enumerate() {
             let mut acc = 0.0f32;
@@ -69,34 +68,28 @@ impl SpectrumAnalyzer {
             }
             let amp = acc.sqrt();
 
-            let tilt =
-                (tri.center_hz / 1000.0).max(0.001).powf(tilt_alpha);
+            let tilt = (tri.center_hz / 1000.0).max(0.001).powf(tilt_alpha);
             let amp_tilted = amp * tilt;
 
-            self.eq_ref[i] =
-                ema_tc(self.eq_ref[i], amp_tilted, 6.0, dt_s)
-                    .max(1e-9);
+            self.eq_ref[i] = ema_tc(self.eq_ref[i], amp_tilted, 6.0, dt_s).max(1e-9);
             let rel = amp_tilted / self.eq_ref[i];
 
-            db_per_band[i] = 20.0 * rel.max(1e-12).log10(); // relative dB
+            db_per_band[i] = 20.0 * rel.max(1e-12).log10();
         }
 
         self.update_db_range(&db_per_band, dt_s);
 
         let low = self.db_low - 3.0;
         let high = self.db_high + 6.0;
-        let range = (high - low).max(12.0);
+        let range_inv = 1.0 / (high - low).max(12.0);
 
-        let mut bars_target = vec![0.0f32; db_per_band.len()];
-        for i in 0..db_per_band.len() {
-            let mut v = (db_per_band[i] - low) / range;
-            if !gate_open {
-                v = 0.0;
+        let mut bars_target = vec![0.0f32; filters_len];
+        if gate_open {
+            for i in 0..filters_len {
+                let mut v = (db_per_band[i] - low) * range_inv;
+                v = v.clamp(0.0, 1.0).powf(0.85);
+                bars_target[i] = 1.0 - (1.0 - v).powf(1.6);
             }
-            // soft comp: gamma < 1 brightens lows, then soft knee near 1
-            v = v.clamp(0.0, 1.0).powf(0.85);
-            v = 1.0 - (1.0 - v).powf(1.6);
-            bars_target[i] = v;
         }
 
         bars_target
@@ -107,22 +100,19 @@ impl SpectrumAnalyzer {
         db_per_band: &[f32],
         dt_s: f32,
     ) {
+        if db_per_band.is_empty() {
+            return;
+        }
+        
         let mut sorted = db_per_band.to_vec();
         sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
 
-        let p = |q: f32| -> f32 {
-            if sorted.is_empty() {
-                return -60.0;
-            }
-            let idx =
-                ((sorted.len() - 1) as f32 * q).round() as usize;
-            sorted[idx]
-        };
+        let idx_low = ((sorted.len() - 1) as f32 * 0.10).round() as usize;
+        let idx_high = ((sorted.len() - 1) as f32 * 0.90).round() as usize;
+        
+        let q10 = sorted[idx_low];
+        let q90 = sorted[idx_high];
 
-        let q10 = p(0.10);
-        let q90 = p(0.90);
-
-        // Smooth the window. Low follows fairly quick, high a bit slower to avoid pumping.
         self.db_low = ema_tc(self.db_low, q10, 0.30, dt_s);
         self.db_high = ema_tc(self.db_high, q90, 0.50, dt_s);
     }
@@ -138,28 +128,22 @@ impl SpectrumAnalyzer {
         let n = bars_target.len();
         let mut flowed = vec![0.0f32; n];
 
+        // Calculate flow for all bars
         for i in 0..n {
-            let left = if i > 0 {
-                self.bars_y[i - 1]
-            } else {
-                self.bars_y[i]
-            };
-            let right = if i + 1 < n {
-                self.bars_y[i + 1]
-            } else {
-                self.bars_y[i]
-            };
+            let left = if i > 0 { self.bars_y[i - 1] } else { self.bars_y[i] };
+            let right = if i + 1 < n { self.bars_y[i + 1] } else { self.bars_y[i] };
             let flow = flow_k * (left + right - 2.0 * self.bars_y[i]);
             flowed[i] = (bars_target[i] + flow).clamp(0.0, 1.0);
         }
 
-        // spring smoothing
-        let c = 2.0 * (spr_k).sqrt() * spr_zeta;
-        for (i, &x) in flowed.iter().enumerate() {
-            let a = spr_k * (x - self.bars_y[i]) - c * self.bars_v[i];
+        // Apply spring physics
+        let c = 2.0 * spr_k.sqrt() * spr_zeta;
+        let dt_s_sq = dt_s * dt_s;
+        
+        for i in 0..n {
+            let a = spr_k * (flowed[i] - self.bars_y[i]) - c * self.bars_v[i];
             self.bars_v[i] += a * dt_s;
-            self.bars_y[i] = (self.bars_y[i] + self.bars_v[i] * dt_s)
-                .clamp(0.0, 1.0);
+            self.bars_y[i] = (self.bars_y[i] + self.bars_v[i] * dt_s).clamp(0.0, 1.0);
         }
     }
 }
