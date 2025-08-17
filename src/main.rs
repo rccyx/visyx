@@ -1,12 +1,21 @@
 use anyhow::{Context, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, Sample, SampleFormat, SizedSample, StreamConfig};
-use crossterm::{cursor, execute, queue, style::{Color, SetForegroundColor}, terminal::{self, ClearType}};
+use crossterm::{
+    cursor, execute, queue,
+    style::{Color, SetForegroundColor},
+    terminal::{self, ClearType},
+};
 use rustfft::{num_complex::Complex, num_traits::ToPrimitive, FftPlanner};
-use std::{env, io::{stdout, Stdout, Write}, sync::{Arc, Mutex}, thread, time::{Duration, Instant}};
+use std::{
+    env,
+    io::{stdout, Stdout, Write},
+    sync::{Arc, Mutex},
+    thread,
+    time::{Duration, Instant},
+};
 
 /* =========================== Ring buffer =========================== */
-
 struct SharedBuf { data: Vec<f32>, write_idx: usize, filled: bool }
 impl SharedBuf {
     fn new(cap: usize) -> Self { Self { data: vec![0.0; cap], write_idx: 0, filled: false } }
@@ -25,7 +34,6 @@ impl SharedBuf {
 }
 
 /* ======================= Audio device helpers ====================== */
-
 fn pick_input_device() -> Result<Device> {
     let host = cpal::default_host();
     if let Ok(want) = env::var("MYCAVA_DEVICE") {
@@ -67,8 +75,7 @@ where T: Sample + SizedSample + ToPrimitive {
     Ok(stream)
 }
 
-/* ====================== Window and filterbank ====================== */
-
+/* ====================== DSP: window + filterbank =================== */
 fn hann(n: usize) -> Vec<f32> {
     let nf = n as f32;
     (0..n).map(|i| 0.5 - 0.5 * f32::cos(2.0 * std::f32::consts::PI * i as f32 / nf)).collect()
@@ -129,72 +136,68 @@ fn build_filterbank(sr: f32, fft_size: usize, bands: usize, fmin: f32, fmax: f32
 }
 
 /* ============================ Layout/Drawing ======================= */
-
 struct Layout { bars: usize, bar_w: u16, gap: u16, left_pad: u16 }
 fn compute_layout(w: u16) -> Layout {
-    let mut bars = 64usize;
-    let mut bar_w = 2u16;
-    let gap = 0u16;
+    // aim to FILL the width, with 0–1 gap, 2–3 width
+    let max_bar_w = 3u16;
+    let min_bar_w = 2u16;
+    let mut bar_w = max_bar_w;
+    let mut gap = 1u16;
+    let margin = 2u16;
+
     loop {
-        let needed = bars as u16 * bar_w + (bars.saturating_sub(1)) as u16 * gap;
-        if needed + 2 <= w {
-            let left_pad = (w - needed) / 2;
-            return Layout { bars, bar_w, gap, left_pad };
+        let avail = w.saturating_sub(margin);
+        let stride = bar_w + gap;
+        let bars_fit = if stride == 0 { 1 } else { (avail / stride).max(1) } as usize;
+
+        let used = bars_fit as u16 * stride - gap; // last bar no gap
+        if used + margin <= w {
+            let left_pad = (w - used) / 2;
+            return Layout { bars: bars_fit.max(32), bar_w, gap, left_pad };
         }
-        if bar_w > 1 { bar_w -= 1; continue; }
-        if bars > 32 { bars -= 8; continue; }
-        return Layout { bars, bar_w, gap, left_pad: 1 };
+
+        if gap > 0 { gap -= 1; continue; }
+        if bar_w > min_bar_w { bar_w -= 1; gap = 1; continue; }
+
+        // worst case tiny terminal
+        let stride = 1u16;
+        let bars_fit = (avail / stride).max(1) as usize;
+        let used = bars_fit as u16 * stride;
+        let left_pad = (w - used) / 2;
+        return Layout { bars: bars_fit, bar_w: 1, gap: 0, left_pad };
     }
 }
 
-// map fractional cell to unicode partial block
-fn frac_char(f: f32) -> char {
-    let idx = (f * 8.0).clamp(0.0, 7.999).floor() as usize;
-    const CH: [char; 9] = [' ', '▁','▂','▃','▄','▅','▆','▇','█'];
-    CH[idx + 1]
-}
-
-fn draw_frame(out: &mut Stdout, bars: &[f32], peaks: &[u16], w: u16, h: u16, lay: &Layout) -> std::io::Result<()> {
+fn draw_frame(out: &mut Stdout, bars: &[f32], w: u16, h: u16, lay: &Layout) -> std::io::Result<()> {
     let max_h = h.saturating_sub(3);
     queue!(out, cursor::MoveTo(0, 1))?;
 
     for row_top in (0..max_h).rev() {
         let rb = max_h - 1 - row_top; // row index from bottom
         let mut line = String::with_capacity(w as usize);
-        let mut cols_used: u16 = 0;
+        let mut cols: u16 = 0;
 
         // left padding
-        for _ in 0..lay.left_pad { line.push(' '); cols_used += 1; }
+        for _ in 0..lay.left_pad { line.push(' '); cols += 1; }
 
         for i in 0..lay.bars.min(bars.len()) {
-            let height = (bars[i].clamp(0.0, 1.0) * max_h as f32).max(0.0);
-            let full = height.floor() as u16;
-            let frac = height - full as f32;
+            let v = bars[i].clamp(0.0, 1.0);
+            let filled = (v * max_h as f32).round() as u16;
 
+            // bar block(s)
             for _ in 0..lay.bar_w {
-                if rb < full { line.push('█'); }
-                else if rb == full && frac > 0.0 { line.push(frac_char(frac)); }
-                else { line.push(' '); }
-                cols_used += 1;
+                if filled > rb { line.push('█'); } else { line.push(' '); }
+                cols += 1;
             }
-
-            // peak marker on last column of the bar
-            if peaks[i] > rb {
-                for _ in 0..lay.gap { line.push(' '); cols_used += 1; }
-                // replace last drawn char with '▀'
-                if line.pop().is_some() { line.push('▀'); } else { line.push('▀'); }
-            } else {
-                for _ in 0..lay.gap { line.push(' '); cols_used += 1; }
-            }
+            for _ in 0..lay.gap { line.push(' '); cols += 1; }
         }
 
-        // pad to full width
-        while cols_used < w { line.push(' '); cols_used += 1; }
+        while cols < w { line.push(' '); cols += 1; }
         line.push('\n');
         out.write_all(line.as_bytes())?;
     }
 
-    // baseline full width
+    // baseline
     let mut base = String::with_capacity(w as usize + 1);
     for _ in 0..w { base.push('─'); }
     base.push('\n');
@@ -204,31 +207,34 @@ fn draw_frame(out: &mut Stdout, bars: &[f32], peaks: &[u16], w: u16, h: u16, lay
 }
 
 /* ============================= Main =============================== */
-
 fn main() -> Result<()> {
     // Tunables
     const FMIN: f32 = 30.0;
     const FMAX: f32 = 16_000.0;
-    const TARGET_FPS_MS: u64 = 16; // ~60 FPS
+    const TARGET_FPS_MS: u64 = 16;
     const FFT_SIZE: usize = 2048;
 
-    // smoothing/compression
-    const SPEC_EMA: f32 = 0.80;
-    const BAR_ATTACK: f32 = 0.45;
-    const BAR_DECAY: f32 = 0.92;
-    const NORM_EMA: f32 = 0.93;
-    const LOG_COMP: f32 = 200.0;
-    const FLOOR_FRAC: f32 = 0.05;
+    // motion/shape
+    const SPEC_EMA: f32 = 0.82;   // smoother spectrum
+    const BAR_ATTACK: f32 = 0.42; // fast rise
+    const BAR_DECAY: f32 = 0.94;  // gentle fall = smoother motion
+    const NORM_EMA: f32 = 0.94;   // stable auto-gain
+    const LOG_COMP: f32 = 190.0;  // log compression
+    const FLOOR_FRAC: f32 = 0.05; // noise floor
 
-    // silence + peaks
+    // gate
     const SILENCE_DB: f32 = -60.0;
-    const PEAK_HOLD_MS: u64 = 240;
-    const PEAK_FALL: u16 = 1;
 
-    // TUI setup
+    // TUI
     let mut out = stdout();
     terminal::enable_raw_mode()?;
-    execute!(out, terminal::EnterAlternateScreen, cursor::Hide, terminal::Clear(ClearType::All), SetForegroundColor(Color::White))?;
+    execute!(
+        out,
+        terminal::EnterAlternateScreen,
+        cursor::Hide,
+        terminal::Clear(ClearType::All),
+        SetForegroundColor(Color::White),
+    )?;
     let _cleanup = scopeguard::guard((), |_| {
         let mut out = stdout();
         let _ = execute!(out, cursor::Show, terminal::LeaveAlternateScreen);
@@ -264,8 +270,6 @@ fn main() -> Result<()> {
     let mut bars_state: Vec<f32> = Vec::new();
     let mut filters: Vec<Tri> = Vec::new();
     let mut norm_max = 0.12f32;
-    let mut peaks: Vec<u16> = Vec::new();
-    let mut peaks_timer: Vec<Instant> = Vec::new();
 
     loop {
         if crossterm::event::poll(Duration::from_millis(0))? {
@@ -284,21 +288,20 @@ fn main() -> Result<()> {
         if filters.len() != lay.bars {
             filters = build_filterbank(sr, FFT_SIZE, lay.bars, FMIN, FMAX);
             bars_state = vec![0.0; lay.bars];
-            peaks = vec![0u16; lay.bars];
-            peaks_timer = vec![Instant::now(); lay.bars];
         }
 
         let samples = { shared.lock().unwrap().latest() };
         if samples.len() < FFT_SIZE { continue; }
         let tail = &samples[samples.len() - FFT_SIZE..];
 
-        // dB power gate
+        // gate level in dB power
         let rms = tail.iter().map(|x| x * x).sum::<f32>() / FFT_SIZE as f32;
         let db = 10.0 * (rms.max(1e-12)).log10();
         let gate_open = db > SILENCE_DB;
 
         // FFT
-        let mut buf: Vec<Complex<f32>> = tail.iter().zip(window.iter()).map(|(x, w)| Complex { re: x * w, im: 0.0 }).collect();
+        let mut buf: Vec<Complex<f32>> =
+            tail.iter().zip(window.iter()).map(|(x, w)| Complex { re: x * w, im: 0.0 }).collect();
         fft.process(&mut buf);
 
         for i in 0..half {
@@ -307,7 +310,7 @@ fn main() -> Result<()> {
             spec_pow_smooth[i] = SPEC_EMA * spec_pow_smooth[i] + (1.0 - SPEC_EMA) * p.max(1e-12);
         }
 
-        // bands
+        // band energies
         let mut bar_vals = vec![0.0f32; lay.bars];
         for (i, tri) in filters.iter().enumerate() {
             let mut acc = 0.0f32;
@@ -317,7 +320,7 @@ fn main() -> Result<()> {
             bar_vals[i] = if gate_open { v } else { 0.0 };
         }
 
-        // Gaussian 7-tap spatial smooth
+        // Gaussian 7-tap spatial smoothing
         if lay.bars >= 7 {
             let k = [1.0f32, 6.0, 15.0, 20.0, 15.0, 6.0, 1.0];
             let mut sm = vec![0.0f32; lay.bars];
@@ -333,41 +336,34 @@ fn main() -> Result<()> {
             bar_vals = sm;
         }
 
-        // normalize and temporal easing
+        // auto-gain with floor
         let frame_max = bar_vals.iter().copied().fold(0.0f32, f32::max);
         norm_max = NORM_EMA * norm_max + (1.0 - NORM_EMA) * frame_max.max(1e-6);
         let floor = norm_max * FLOOR_FRAC;
         let scale = (norm_max - floor).max(1e-6);
 
-        let max_h = h.saturating_sub(3);
+        // temporal easing
         for i in 0..lay.bars {
-            let v = (((bar_vals[i] - floor) / scale).clamp(0.0, 1.0)).powf(0.85);
+            let v = ((bar_vals[i] - floor) / scale).clamp(0.0, 1.0);
             if v > bars_state[i] {
                 bars_state[i] = BAR_ATTACK * bars_state[i] + (1.0 - BAR_ATTACK) * v;
             } else {
-                bars_state[i] *= BAR_DECAY;
+                bars_state[i] = bars_state[i] * BAR_DECAY;
                 if v > bars_state[i] { bars_state[i] = v; }
-            }
-
-            // peaks
-            let cur_h = (bars_state[i] * max_h as f32).round() as u16;
-            if cur_h > peaks[i] { peaks[i] = cur_h; peaks_timer[i] = now; }
-            else if now.duration_since(peaks_timer[i]) > Duration::from_millis(PEAK_HOLD_MS) && peaks[i] > 0 {
-                peaks[i] = peaks[i].saturating_sub(PEAK_FALL);
             }
         }
 
         // draw
         queue!(out, terminal::Clear(ClearType::All), cursor::MoveTo(0, 0), SetForegroundColor(Color::White))?;
-        let header = format!("  mycava  |  input: {}  |  rate: {} Hz  |  level: {:>5.1} dB  |  q to quit\n",
-                             name, sr as u32, db);
+        let header = format!("  mycava  |  input: {}  |  q quits\n", name);
         out.write_all(header.as_bytes())?;
-        draw_frame(&mut out, &bars_state, &peaks, w, h, &lay)?;
+        draw_frame(&mut out, &bars_state, w, h, &lay)?;
     }
 
     Ok(())
 }
 
+/* =========================== Scopeguard =========================== */
 mod scopeguard {
     pub fn guard<T, F: FnOnce(T)>(v: T, f: F) -> Guard<T, F> { Guard { v: Some(v), f: Some(f) } }
     pub struct Guard<T, F: FnOnce(T)> { v: Option<T>, f: Option<F> }
