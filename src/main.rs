@@ -10,7 +10,6 @@ use rustfft::{
     num_complex::Complex, num_traits::ToPrimitive, FftPlanner,
 };
 use std::{
-    env,
     io::{stdout, Stdout, Write},
     sync::{Arc, Mutex},
     thread,
@@ -52,18 +51,7 @@ impl SharedBuf {
 /* ======================= Audio device helpers ====================== */
 fn pick_input_device() -> Result<Device> {
     let host = cpal::default_host();
-    if let Ok(want) = env::var("LOOKAS_DEVICE") {
-        for dev in host.input_devices()? {
-            if dev
-                .name()?
-                .to_lowercase()
-                .contains(&want.to_lowercase())
-            {
-                return Ok(dev);
-            }
-        }
-        anyhow::bail!("LOOKAS_DEVICE='{}' not found", want);
-    }
+    // prefer a monitor device if present
     for dev in host.input_devices()? {
         let name = dev
             .name()
@@ -232,18 +220,6 @@ enum Orient {
     Vertical,
     Horizontal,
 }
-impl Orient {
-    fn from_env() -> Self {
-        match env::var("LOOKAS_ORIENT")
-            .unwrap_or_else(|_| "vertical".into())
-            .to_lowercase()
-            .as_str()
-        {
-            "h" | "hor" | "horizontal" => Orient::Horizontal,
-            _ => Orient::Vertical,
-        }
-    }
-}
 
 struct Layout {
     bars: usize,
@@ -381,63 +357,19 @@ fn draw_blocks_horizontal(
 
 /* ============================= Main =============================== */
 fn main() -> Result<()> {
-    // Visualizer params
-    let db_min: f32 = env::var("LOOKAS_DB_MIN")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(-70.0);
-    let db_max: f32 = env::var("LOOKAS_DB_MAX")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(-18.0);
-    let tilt_alpha: f32 = env::var("LOOKAS_TILT")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(0.30);
-    let gate_db: f32 = env::var("LOOKAS_GATE_DB")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(-55.0);
-    let gain_db: f32 = env::var("LOOKAS_GAIN_DB")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(0.0);
-    let gain_lin: f32 = 10f32.powf(gain_db / 20.0);
-
-    // Whitening defaults toned down
-    let eq_tau: f32 = env::var("LOOKAS_EQ_TAU")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(6.0);
-    let eq_strength: f32 = env::var("LOOKAS_EQ_STRENGTH")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(0.60);
-
-    // Motion extras
-    let wobble_amp: f32 = env::var("LOOKAS_WOBBLE_AMP")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(0.12);
-    let wobble_speed_base: f32 = env::var("LOOKAS_WOBBLE_SPEED")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(2.6);
-    let flow_k: f32 = env::var("LOOKAS_FLOW")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(0.18);
-
-    // Audio/DSP tunables
+    // Constants tuned to behave like CAVA without manual gain
     const FMIN: f32 = 30.0;
     const FMAX: f32 = 16_000.0;
     const TARGET_FPS_MS: u64 = 16;
     const FFT_SIZE: usize = 2048;
-    const TAU_SPEC: f32 = 0.06;
-    const SPR_K: f32 = 60.0;
+    const TAU_SPEC: f32 = 0.06; // spectrum smoothing
+    const GATE_DB: f32 = -55.0; // ignore room hiss
+    const TILT_ALPHA: f32 = 0.30; // reduce low end dominance
+    const FLOW_K: f32 = 0.18; // lateral energy flow
+    const SPR_K: f32 = 60.0; // spring to keep motion smooth
     const SPR_ZETA: f32 = 1.0;
 
-    // TUI setup
+    // TUI
     let mut out = stdout();
     terminal::enable_raw_mode()?;
     execute!(
@@ -491,24 +423,28 @@ fn main() -> Result<()> {
     let target_dt = Duration::from_millis(TARGET_FPS_MS);
     let mut spec_pow_smooth: Vec<f32> = vec![0.0; half];
     let mut filters: Vec<Tri> = Vec::new();
-    let mut bars_target: Vec<f32> = Vec::new();
     let mut bars_y: Vec<f32> = Vec::new();
     let mut bars_v: Vec<f32> = Vec::new();
     let mut eq_ref: Vec<f32> = Vec::new();
 
-    // Dance state
-    let mut phase: f32 = 0.0;
-    let mut energy_lp: f32 = 0.0;
+    // Auto gain control state
+    let mut db_low: f32 = -60.0; // tracks 10th percentile dB
+    let mut db_high: f32 = -20.0; // tracks 90th percentile dB
 
-    let orient = Orient::from_env();
+    // Animation state
+    let mut orient = Orient::Vertical;
 
     loop {
         if crossterm::event::poll(Duration::from_millis(0))? {
             if let crossterm::event::Event::Key(k) =
                 crossterm::event::read()?
             {
-                if let crossterm::event::KeyCode::Char('q') = k.code {
-                    return Ok(());
+                use crossterm::event::KeyCode::*;
+                match k.code {
+                    Char('q') => return Ok(()),
+                    Char('v') => orient = Orient::Vertical,
+                    Char('h') => orient = Orient::Horizontal,
+                    _ => {}
                 }
             }
         }
@@ -524,7 +460,6 @@ fn main() -> Result<()> {
 
         let (w, h) = terminal::size()?;
         let lay = layout_for(w, h, orient);
-
         let desired_bars = match orient {
             Orient::Vertical => lay.bars,
             Orient::Horizontal => h.saturating_sub(3) as usize,
@@ -538,7 +473,6 @@ fn main() -> Result<()> {
                 FMIN,
                 FMAX,
             );
-            bars_target = vec![0.0; desired_bars];
             bars_y = vec![0.0; desired_bars];
             bars_v = vec![0.0; desired_bars];
             eq_ref = vec![1e-6; desired_bars];
@@ -550,11 +484,11 @@ fn main() -> Result<()> {
         }
         let tail = &samples[samples.len() - FFT_SIZE..];
 
-        // ambient gate
+        // gate on room noise
         let rms =
             tail.iter().map(|x| x * x).sum::<f32>() / FFT_SIZE as f32;
         let rms_db = 10.0 * (rms.max(1e-12)).log10();
-        let gate_open = rms_db > gate_db;
+        let gate_open = rms_db > GATE_DB;
 
         let mut buf: Vec<Complex<f32>> = tail
             .iter()
@@ -576,79 +510,77 @@ fn main() -> Result<()> {
             );
         }
 
-        // Per-band feature -> 0..1 with whitening
+        // Build per band dB relative to a slow baseline, with mild tilt
+        let mut db_per_band = vec![0.0f32; filters.len()];
         for (i, tri) in filters.iter().enumerate() {
             let mut acc = 0.0f32;
             for &(idx, wgt) in &tri.taps {
                 acc += spec_pow_smooth[idx] * wgt;
             }
-            let amp = acc.sqrt() * gain_lin;
+            let amp = acc.sqrt();
 
-            // tilt low end a bit so highs show up
             let tilt =
-                (tri.center_hz / 1000.0).max(0.001).powf(tilt_alpha);
+                (tri.center_hz / 1000.0).max(0.001).powf(TILT_ALPHA);
             let amp_tilted = amp * tilt;
 
-            // adaptive whitening relative to a slow baseline
             eq_ref[i] =
-                ema_tc(eq_ref[i], amp_tilted, eq_tau, dt_s).max(1e-9);
-            let rel = (amp_tilted / eq_ref[i]).powf(eq_strength);
+                ema_tc(eq_ref[i], amp_tilted, 6.0, dt_s).max(1e-9);
+            let rel = amp_tilted / eq_ref[i];
 
-            // map to dB window
-            let db = 20.0 * rel.max(1e-12).log10();
-            let mut v = (db - db_min) / (db_max - db_min);
+            db_per_band[i] = 20.0 * rel.max(1e-12).log10(); // relative dB
+        }
+
+        // Percentile based auto range like CAVA
+        let mut sorted = db_per_band.clone();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let p = |q: f32| -> f32 {
+            if sorted.is_empty() {
+                return -60.0;
+            }
+            let idx =
+                ((sorted.len() - 1) as f32 * q).round() as usize;
+            sorted[idx]
+        };
+        let q10 = p(0.10);
+        let q90 = p(0.90);
+
+        // Smooth the window. Low follows fairly quick, high a bit slower to avoid pumping.
+        db_low = ema_tc(db_low, q10, 0.30, dt_s);
+        db_high = ema_tc(db_high, q90, 0.50, dt_s);
+
+        // Expand a little so peaks do not slam the ceiling
+        let low = db_low - 3.0;
+        let high = db_high + 6.0;
+        let range = (high - low).max(12.0);
+
+        // Map to 0..1 with soft compression and lateral flow
+        let mut bars_target = vec![0.0f32; db_per_band.len()];
+        for i in 0..db_per_band.len() {
+            let mut v = (db_per_band[i] - low) / range;
             if !gate_open {
                 v = 0.0;
             }
-            bars_target[i] = v.clamp(0.0, 1.0);
+            // soft comp: gamma < 1 brightens lows, then soft knee near 1
+            v = v.clamp(0.0, 1.0).powf(0.85);
+            v = 1.0 - (1.0 - v).powf(1.6);
+            bars_target[i] = v;
         }
 
-        // Global energy for envelope
-        let mean_energy = if !bars_target.is_empty() {
-            bars_target.iter().copied().sum::<f32>()
-                / bars_target.len() as f32
-        } else {
-            0.0
-        };
-        energy_lp = ema_tc(energy_lp, mean_energy, 0.18, dt_s);
-
-        // Bass drives ripple speed
-        let mut bass = 0.0f32;
-        let mut bass_n = 0usize;
-        for (i, tri) in filters.iter().enumerate() {
-            if tri.center_hz < 160.0 {
-                bass += bars_target[i];
-                bass_n += 1;
-            }
-        }
-        let bass_avg = if bass_n > 0 {
-            bass / bass_n as f32
-        } else {
-            0.0
-        };
-        let wobble_speed = wobble_speed_base + 6.0 * bass_avg;
-        phase =
-            (phase + wobble_speed * dt_s) % (std::f32::consts::TAU);
-
-        // Neighbor flow and beat-driven ripple
+        // Gentle neighbor flow so it feels alive, not pure meters
         let n = bars_target.len();
-        let mut driven = vec![0.0f32; n];
+        let mut flowed = vec![0.0f32; n];
         for i in 0..n {
             let left = if i > 0 { bars_y[i - 1] } else { bars_y[i] };
             let right =
                 if i + 1 < n { bars_y[i + 1] } else { bars_y[i] };
-            let flow = flow_k * (left + right - 2.0 * bars_y[i]);
-            let ripple = wobble_amp
-                * energy_lp
-                * (phase + i as f32 * 0.35).sin();
-            driven[i] =
-                (bars_target[i] + flow + ripple).clamp(0.0, 1.0);
+            let flow = FLOW_K * (left + right - 2.0 * bars_y[i]);
+            flowed[i] = (bars_target[i] + flow).clamp(0.0, 1.0);
         }
 
-        // spring smoothing for motion
+        // spring smoothing
         let c = 2.0 * (SPR_K).sqrt() * SPR_ZETA;
-        for i in 0..driven.len() {
-            let x = driven[i];
+        for i in 0..flowed.len() {
+            let x = flowed[i];
             let a = SPR_K * (x - bars_y[i]) - c * bars_v[i];
             bars_v[i] += a * dt_s;
             bars_y[i] =
@@ -662,10 +594,10 @@ fn main() -> Result<()> {
             SetForegroundColor(Color::White)
         )?;
         let header = format!(
-            "  lookas  |  input: {}  |  orient: {}  |  dB:[{:.0},{:.0}] gain:{:.0}dB tilt:{:.2} eq:{:.2}@{:.1}s  |  flow:{:.2} wob:{:.2}@{:.1}  |  q quits\n",
+            "  lookas  |  input: {}  |  orient: {}  |  auto gain window [{:.1} dB .. {:.1} dB]  |  v/h to switch, q quits\n",
             name,
             match orient { Orient::Vertical => "vertical", Orient::Horizontal => "horizontal" },
-            db_min, db_max, gain_db, tilt_alpha, eq_strength, eq_tau, flow_k, wobble_amp, wobble_speed
+            low, high
         );
         out.write_all(header.as_bytes())?;
 
@@ -689,8 +621,8 @@ mod scopeguard {
         }
     }
     pub struct Guard<T, F: FnOnce(T)> {
-        pub(crate) v: Option<T>,
-        pub(crate) f: Option<F>,
+        v: Option<T>,
+        f: Option<F>,
     }
     impl<T, F: FnOnce(T)> Drop for Guard<T, F> {
         fn drop(&mut self) {
