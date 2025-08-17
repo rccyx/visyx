@@ -6,6 +6,14 @@ A terminal-based audio spectrum visualizer written in Rust.
 
 Lookas is a lightweight audio spectrum analyzer that displays real-time audio visualization in your terminal. It captures audio input, performs FFT analysis, and renders the frequency spectrum as either vertical bars (like a traditional spectrum analyzer) or horizontal bars.
 
+<details>
+  <summary>Click to see the preview</summary>
+
+  ![Visualizer preview](https://github.com/user-attachments/assets/1533afdf-3826-4e14-839f-9b880864bac1)
+
+</details>
+
+
 ## Features
 
 - Real-time audio visualization in the terminal
