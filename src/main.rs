@@ -72,7 +72,9 @@ fn hann(n: usize) -> Vec<f32> {
     let a = (-dt_s / tau_s).exp(); a * prev + (1.0 - a) * x
 }
 
-#[derive(Clone)] struct Tri { taps: Vec<(usize, f32)> }
+/* ================= Filterbank (Mel) with center freq ================= */
+#[derive(Clone)]
+struct Tri { taps: Vec<(usize, f32)>, center_hz: f32 }
 fn hz_to_mel(f: f32) -> f32 { 2595.0 * ((1.0 + f / 700.0).log10()) }
 fn mel_to_hz(m: f32) -> f32 { 700.0 * (10f32.powf(m / 2595.0) - 1.0) }
 fn build_filterbank(sr: f32, fft_size: usize, bands: usize, fmin: f32, fmax: f32) -> Vec<Tri> {
@@ -82,7 +84,9 @@ fn build_filterbank(sr: f32, fft_size: usize, bands: usize, fmin: f32, fmax: f32
     let mmax = hz_to_mel(fmax.min(sr * 0.5 - hz_per_bin));
 
     let mut mel_points = Vec::with_capacity(bands + 2);
-    for i in 0..(bands + 2) { mel_points.push(mmin + (i as f32) * (mmax - mmin) / (bands as f32 + 1.0)); }
+    for i in 0..(bands + 2) {
+        mel_points.push(mmin + (i as f32) * (mmax - mmin) / (bands as f32 + 1.0));
+    }
     let hz_points: Vec<f32> = mel_points.into_iter().map(mel_to_hz).collect();
 
     let mut bin_points: Vec<usize> = hz_points.iter().map(|&hz| {
@@ -100,13 +104,22 @@ fn build_filterbank(sr: f32, fft_size: usize, bands: usize, fmin: f32, fmax: f32
 
     let mut filters = Vec::with_capacity(bands);
     for b in 0..bands {
-        let l = bin_points[b]; let c = bin_points[b + 1]; let r = bin_points[b + 2];
+        let l = bin_points[b];
+        let c = bin_points[b + 1];
+        let r = bin_points[b + 2];
         let mut taps = Vec::new();
-        for i in l..=c { let w = if c == l { 0.0 } else { (i - l) as f32 / (c - l) as f32 }; taps.push((i, w)); }
-        for i in c..=r { let w = if r == c { 0.0 } else { 1.0 - (i - c) as f32 / (r - c) as f32 }; taps.push((i, w)); }
+        for i in l..=c {
+            let w = if c == l { 0.0 } else { (i - l) as f32 / (c - l) as f32 };
+            taps.push((i, w));
+        }
+        for i in c..=r {
+            let w = if r == c { 0.0 } else { 1.0 - (i - c) as f32 / (r - c) as f32 };
+            taps.push((i, w));
+        }
         let sumw = taps.iter().map(|(_, w)| *w).sum::<f32>().max(1e-6);
         for t in &mut taps { t.1 /= sumw; }
-        filters.push(Tri { taps });
+        let center_hz = c as f32 * hz_per_bin;
+        filters.push(Tri { taps, center_hz });
     }
     filters
 }
@@ -133,19 +146,16 @@ impl Orient {
 struct Layout { bars: usize, left_pad: u16, right_pad: u16 }
 fn layout_for(w: u16, _h: u16, orient: Orient) -> Layout {
     match orient {
-        // keep a blank right margin to kill the ugly edge line
         Orient::Vertical => {
             let left_pad = 1u16;
-            let right_pad = 2u16; // empty space at the right
+            let right_pad = 2u16;
             let usable = w.saturating_sub(left_pad + right_pad);
             Layout { bars: usable.max(10) as usize, left_pad, right_pad }
         }
-        // horizontal uses one row per bar, bars = rows decided later
         Orient::Horizontal => Layout { bars: 0, left_pad: 1, right_pad: 2 },
     }
 }
 
-/* vertical columns across width */
 fn draw_blocks_vertical(out: &mut Stdout, bars: &[f32], w: u16, h: u16, lay: &Layout) -> std::io::Result<()> {
     let rows = h.saturating_sub(3) as usize;
     if rows == 0 { return Ok(()); }
@@ -166,12 +176,9 @@ fn draw_blocks_vertical(out: &mut Stdout, bars: &[f32], w: u16, h: u16, lay: &La
                 let mut level = (frac * 8.0).floor();
                 if frac.fract() > threshold { level += 1.0; }
                 BLOCKS[level.clamp(0.0, 8.0) as usize]
-            } else {
-                ' '
-            };
+            } else { ' ' };
             line.push(ch);
         }
-        // right margin kept blank by design
         for _ in 0..lay.right_pad { line.push(' '); }
         line.push('\n');
         out.write_all(line.as_bytes())?;
@@ -180,7 +187,6 @@ fn draw_blocks_vertical(out: &mut Stdout, bars: &[f32], w: u16, h: u16, lay: &La
     Ok(())
 }
 
-/* horizontal rows up the screen */
 fn draw_blocks_horizontal(out: &mut Stdout, bars: &[f32], w: u16, h: u16, lay: &Layout) -> std::io::Result<()> {
     let rows = h.saturating_sub(3) as usize;
     let usable_w = w.saturating_sub(lay.left_pad + lay.right_pad) as usize;
@@ -195,58 +201,46 @@ fn draw_blocks_horizontal(out: &mut Stdout, bars: &[f32], w: u16, h: u16, lay: &
 
         let mut line = String::with_capacity(w as usize);
         for _ in 0..lay.left_pad { line.push(' '); }
-
-        // solid fill
         for _ in 0..full { line.push('█'); }
-
-        // fractional column via ordered dithering
         if full < usable_w {
             let threshold = BAYER8[row & 7][full & 7] as f32 / 64.0;
             let mut level = (frac * 8.0).floor();
             if frac.fract() > threshold { level += 1.0; }
             line.push(BLOCKS[level.clamp(0.0, 8.0) as usize]);
         }
-
-        // rest blank
         while line.chars().count() < (lay.left_pad as usize + usable_w) { line.push(' '); }
         for _ in 0..lay.right_pad { line.push(' '); }
         line.push('\n');
         out.write_all(line.as_bytes())?;
     }
-
-    // pad remaining rows if bars < rows
     for _ in bars.len()..rows {
         let mut line = String::new();
         for _ in 0..w { line.push(' '); }
         line.push('\n');
         out.write_all(line.as_bytes())?;
     }
-
     out.flush()?;
     Ok(())
 }
 
 /* ============================= Main =============================== */
 fn main() -> Result<()> {
-    // Tunables
+    // Visualizer params (tweak via env without recompile)
+    let db_min: f32 = env::var("LOOKAS_DB_MIN").ok().and_then(|s| s.parse().ok()).unwrap_or(-70.0);
+    let db_max: f32 = env::var("LOOKAS_DB_MAX").ok().and_then(|s| s.parse().ok()).unwrap_or(-15.0);
+    let tilt_alpha: f32 = env::var("LOOKAS_TILT").ok().and_then(|s| s.parse().ok()).unwrap_or(0.35);
+    let gate_db: f32 = env::var("LOOKAS_GATE_DB").ok().and_then(|s| s.parse().ok()).unwrap_or(-50.0);
+
+    // Audio/DSP tunables
     const FMIN: f32 = 30.0;
     const FMAX: f32 = 16_000.0;
     const TARGET_FPS_MS: u64 = 16;
     const FFT_SIZE: usize = 2048;
-
-    // time constants
-    const TAU_SPEC: f32 = 0.10;
-    const TAU_NORM: f32 = 0.45;
-    const FLOOR_FRAC: f32 = 0.05;
-    const LOG_COMP: f32 = 180.0;
-
-    // spring smoother
+    const TAU_SPEC: f32 = 0.06; // a hair quicker to show waves
     const SPR_K: f32 = 60.0;
     const SPR_ZETA: f32 = 1.0;
 
-    const SILENCE_DB: f32 = -60.0;
-
-    // TUI setup
+    // TUI
     let mut out = stdout();
     terminal::enable_raw_mode()?;
     execute!(out, terminal::EnterAlternateScreen, cursor::Hide, terminal::Clear(ClearType::All), SetForegroundColor(Color::White))?;
@@ -256,7 +250,7 @@ fn main() -> Result<()> {
         let _ = terminal::disable_raw_mode();
     });
 
-    // Audio
+    // Audio in
     let device = pick_input_device()?;
     let name = device.name().unwrap_or_else(|_| "<unknown>".into());
     let cfg = best_config_for(&device)?;
@@ -287,9 +281,6 @@ fn main() -> Result<()> {
     let mut bars_y: Vec<f32> = Vec::new();
     let mut bars_v: Vec<f32> = Vec::new();
 
-    let mut norm_max = 0.12f32;
-    let mut frame_counter: u32 = 0;
-
     let orient = Orient::from_env();
 
     loop {
@@ -304,17 +295,12 @@ fn main() -> Result<()> {
         if dt < target_dt { thread::sleep(target_dt - dt); continue; }
         let dt_s = dt.as_secs_f32();
         last = now;
-        frame_counter = frame_counter.wrapping_add(1);
 
         let (w, h) = terminal::size()?;
         let lay = layout_for(w, h, orient);
 
-        // decide bars count based on orientation
-        let desired_bars = match orient {
-            Orient::Vertical => lay.bars,
-            Orient::Horizontal => h.saturating_sub(3) as usize, // one row per band
-        };
-
+        // Decide number of bands from layout/orientation
+        let desired_bars = match orient { Orient::Vertical => lay.bars, Orient::Horizontal => h.saturating_sub(3) as usize };
         if filters.len() != desired_bars {
             filters = build_filterbank(sr, FFT_SIZE, desired_bars, FMIN, FMAX);
             bars_target = vec![0.0; desired_bars];
@@ -326,9 +312,10 @@ fn main() -> Result<()> {
         if samples.len() < FFT_SIZE { continue; }
         let tail = &samples[samples.len() - FFT_SIZE..];
 
+        // ambient gate
         let rms = tail.iter().map(|x| x * x).sum::<f32>() / FFT_SIZE as f32;
-        let db = 10.0 * (rms.max(1e-12)).log10();
-        let gate_open = db > SILENCE_DB;
+        let rms_db = 10.0 * (rms.max(1e-12)).log10();
+        let gate_open = rms_db > gate_db;
 
         let mut buf: Vec<Complex<f32>> = tail.iter().zip(window.iter()).map(|(x, w)| Complex { re: x * w, im: 0.0 }).collect();
         fft.process(&mut buf);
@@ -343,40 +330,34 @@ fn main() -> Result<()> {
             let mut acc = 0.0f32;
             for &(idx, wgt) in &tri.taps { acc += spec_pow_smooth[idx] * wgt; }
             let amp = acc.sqrt();
-            let v = (amp * LOG_COMP + 1.0).ln() / (LOG_COMP + 1.0).ln();
-            bars_target[i] = if gate_open { v } else { 0.0 };
+
+            // spectral tilt compensation to avoid left-lean dominance
+            let tilt = (tri.center_hz / 1000.0).max(0.001).powf(tilt_alpha);
+            let amp_tilted = amp * tilt;
+
+            // fixed dB mapping for stable sensitivity
+            let db = 20.0 * amp_tilted.max(1e-12).log10();
+            let mut v = (db - db_min) / (db_max - db_min);
+            if !gate_open { v = 0.0; }
+            bars_target[i] = v.clamp(0.0, 1.0);
         }
 
-        // gentle spatial smoothing
-        if desired_bars >= 9 {
-            let k = [1.0f32, 4.0, 11.0, 22.0, 27.0, 22.0, 11.0, 4.0, 1.0];
-            let mut sm = vec![0.0f32; desired_bars];
-            for i in 0..desired_bars {
-                let mut acc = 0.0; let mut wsum = 0.0;
-                for (j, wgt) in k.iter().enumerate() {
-                    let idx = (i as isize + j as isize - 4).clamp(0, (desired_bars - 1) as isize) as usize;
-                    acc += bars_target[idx] * *wgt; wsum += *wgt;
-                }
-                sm[i] = acc / wsum;
-            }
-            bars_target.copy_from_slice(&sm);
-        }
-
-        let frame_max = bars_target.iter().copied().fold(0.0f32, f32::max);
-        norm_max = ema_tc(norm_max, frame_max.max(1e-6), TAU_NORM, dt_s);
-        let floor = norm_max * FLOOR_FRAC;
-        let scale = (norm_max - floor).max(1e-6);
-
+        // spring smoothing
         let c = 2.0 * (SPR_K).sqrt() * SPR_ZETA;
-        for i in 0..desired_bars {
-            let x = ((bars_target[i] - floor) / scale).clamp(0.0, 1.0);
+        for i in 0..bars_target.len() {
+            let x = bars_target[i];
             let a = SPR_K * (x - bars_y[i]) - c * bars_v[i];
             bars_v[i] += a * dt_s;
             bars_y[i] = (bars_y[i] + bars_v[i] * dt_s).clamp(0.0, 1.0);
         }
 
         queue!(out, terminal::Clear(ClearType::All), cursor::MoveTo(0, 0), SetForegroundColor(Color::White))?;
-        let header = format!("  lookas  |  input: {}  |  orient: {}  |  q quits\n", name, match orient { Orient::Vertical => "vertical", Orient::Horizontal => "horizontal" });
+        let header = format!(
+            "  lookas  |  input: {}  |  orient: {}  |  dB:[{:.0},{:.0}] tilt:{:.2}  |  q quits\n",
+            name,
+            match orient { Orient::Vertical => "vertical", Orient::Horizontal => "horizontal" },
+            db_min, db_max, tilt_alpha
+        );
         out.write_all(header.as_bytes())?;
 
         match orient {
