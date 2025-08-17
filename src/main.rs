@@ -48,13 +48,11 @@ fn pick_input_device() -> Result<Device> {
     }
     host.default_input_device().context("No default input device")
 }
-
 fn best_config_for(device: &Device) -> Result<StreamConfig> {
     let mut cfg = device.default_input_config()?.config();
     cfg.sample_rate.0 = cfg.sample_rate.0.clamp(44_100, 48_000);
     Ok(cfg)
 }
-
 fn build_stream<T>(device: Device, cfg: StreamConfig, shared: Arc<Mutex<SharedBuf>>) -> Result<cpal::Stream>
 where T: Sample + SizedSample + ToPrimitive {
     let ch = cfg.channels as usize;
@@ -75,23 +73,23 @@ where T: Sample + SizedSample + ToPrimitive {
     Ok(stream)
 }
 
-/* ====================== DSP: window + filterbank =================== */
+/* ====================== DSP helpers ====================== */
 fn hann(n: usize) -> Vec<f32> {
-    // standard Hann with n-1 in the denominator
     let den = (n.max(2) - 1) as f32;
     (0..n).map(|i| 0.5 - 0.5 * f32::cos(2.0 * std::f32::consts::PI * i as f32 / den)).collect()
+}
+#[inline] fn ema_tc(prev: f32, x: f32, tau_s: f32, dt_s: f32) -> f32 {
+    let a = (-dt_s / tau_s).exp();
+    a * prev + (1.0 - a) * x
 }
 
 #[derive(Clone)]
 struct Tri { taps: Vec<(usize, f32)> }
-
 fn hz_to_mel(f: f32) -> f32 { 2595.0 * ((1.0 + f / 700.0).log10()) }
 fn mel_to_hz(m: f32) -> f32 { 700.0 * (10f32.powf(m / 2595.0) - 1.0) }
-
 fn build_filterbank(sr: f32, fft_size: usize, bands: usize, fmin: f32, fmax: f32) -> Vec<Tri> {
     let half = fft_size / 2;
     let hz_per_bin = sr / fft_size as f32;
-
     let mmin = hz_to_mel(fmin.max(hz_per_bin));
     let mmax = hz_to_mel(fmax.min(sr * 0.5 - hz_per_bin));
 
@@ -108,7 +106,6 @@ fn build_filterbank(sr: f32, fft_size: usize, bands: usize, fmin: f32, fmax: f32
         if b as usize >= half { b = (half - 1) as isize; }
         b as usize
     }).collect();
-
     for i in 1..bin_points.len() {
         if bin_points[i] <= bin_points[i - 1] {
             bin_points[i] = (bin_points[i - 1] + 1).min(half - 1);
@@ -137,7 +134,6 @@ fn build_filterbank(sr: f32, fft_size: usize, bands: usize, fmin: f32, fmax: f32
 }
 
 /* ============================ Braille draw ========================= */
-// Each char has 8 vertical dots. Order bottom to top: 7,8,3,6,2,5,1,4.
 fn braille_from_bottom_dots(n: u8) -> char {
     if n == 0 { return ' '; }
     let order = [0x40u16, 0x80, 0x04, 0x20, 0x02, 0x10, 0x01, 0x08];
@@ -145,57 +141,58 @@ fn braille_from_bottom_dots(n: u8) -> char {
     for i in 0..n.min(8) as usize { bits |= order[i]; }
     char::from_u32(0x2800 + bits as u32).unwrap()
 }
-
 struct Layout { bars: usize, gap: u16, left_pad: u16 }
 fn compute_layout(w: u16) -> Layout {
     let margin = 2u16;
     let gap = 1u16;
     let avail = w.saturating_sub(margin);
-    let stride = 1 + gap; // 1 braille column + gap
+    let stride = 1 + gap;
     let bars_fit = (avail / stride).max(10) as usize;
     let used = bars_fit as u16 * stride - gap;
     let left_pad = w.saturating_sub(used) / 2;
     Layout { bars: bars_fit, gap, left_pad }
 }
-
-fn draw_braille(out: &mut Stdout, bars: &[f32], w: u16, h: u16, lay: &Layout) -> std::io::Result<()> {
-    let rows = h.saturating_sub(3) as usize; // leave space for header and baseline
+fn draw_braille(out: &mut Stdout, bars: &[f32], w: u16, h: u16, lay: &Layout, phase: u32) -> std::io::Result<()> {
+    let rows = h.saturating_sub(3) as usize;
     if rows == 0 { return Ok(()); }
-
     queue!(out, cursor::MoveTo(0, 1))?;
 
-    // Build each line once, top to bottom
+    // tiny LCG for stable stochastic rounding of the fractional dot
+    let mut rng = phase.wrapping_mul(1664525).wrapping_add(1013904223);
+
     for row_top in 0..rows {
         let mut line = String::with_capacity(w as usize);
         for _ in 0..lay.left_pad { line.push(' '); }
-
-        // this row index from top; convert to how many dots remain at this row
         let row_from_bottom = rows - 1 - row_top;
 
         for i in 0..lay.bars.min(bars.len()) {
             let v = bars[i].clamp(0.0, 1.0);
-            let total_dots = (v * (rows as f32 * 8.0)).round() as i32;
-            let rem = total_dots - (row_from_bottom as i32) * 8;
+            let dots_total = v * (rows as f32 * 8.0);
+            let full = (dots_total / 8.0).floor() as i32;
+            let rem_all = (dots_total - full as f32 * 8.0).max(0.0);
 
+            // for this row
+            let rem = (dots_total as i32) - (row_from_bottom as i32) * 8;
             let ch = if rem >= 8 {
-                '\u{28FF}' // full cell
+                '\u{28FF}'
             } else if rem > 0 {
-                braille_from_bottom_dots(rem as u8)
+                // stochastic rounding on the last dot to remove stepping
+                rng = rng.wrapping_mul(1664525).wrapping_add(1013904223);
+                let frac = rem_all.fract();
+                let add = ((rng >> 8) as f32 / u32::MAX as f32) < frac;
+                let n = rem as u8 + if add { 1 } else { 0 };
+                braille_from_bottom_dots(n.min(8))
             } else {
                 ' '
             };
             line.push(ch);
-
             for _ in 0..lay.gap { line.push(' '); }
         }
-
-        // pad to screen width
         while line.chars().count() < w as usize { line.push(' '); }
         line.push('\n');
         out.write_all(line.as_bytes())?;
     }
 
-    // baseline
     let mut base = String::with_capacity(w as usize + 1);
     for _ in 0..w { base.push('─'); }
     base.push('\n');
@@ -212,18 +209,18 @@ fn main() -> Result<()> {
     const TARGET_FPS_MS: u64 = 16;
     const FFT_SIZE: usize = 2048;
 
-    // motion/shape
-    const SPEC_EMA: f32 = 0.85;
-    const BAR_ATTACK: f32 = 0.40;
-    const BAR_DECAY: f32 = 0.93;
-    const NORM_EMA: f32 = 0.95;
+    // time constants (seconds)
+    const TAU_SPEC: f32 = 0.10;     // spectrum smoothing
+    const TAU_NORM: f32 = 0.45;     // auto gain tracking
+    const FLOOR_FRAC: f32 = 0.05;   // noise floor
     const LOG_COMP: f32 = 180.0;
-    const FLOOR_FRAC: f32 = 0.05;
 
-    // gate
+    // spring smoother per bar
+    const SPR_K: f32 = 60.0;        // stiffness
+    const SPR_ZETA: f32 = 1.0;      // 1.0 gives critical damping
+
     const SILENCE_DB: f32 = -60.0;
 
-    // TUI
     let mut out = stdout();
     terminal::enable_raw_mode()?;
     execute!(
@@ -265,34 +262,51 @@ fn main() -> Result<()> {
     let mut last = Instant::now();
     let target_dt = Duration::from_millis(TARGET_FPS_MS);
     let mut spec_pow_smooth: Vec<f32> = vec![0.0; half];
-    let mut bars_state: Vec<f32> = Vec::new();
     let mut filters: Vec<Tri> = Vec::new();
+    let mut bars_target: Vec<f32> = Vec::new();
+
+    // spring state
+    let mut bars_y: Vec<f32> = Vec::new();
+    let mut bars_v: Vec<f32> = Vec::new();
+
     let mut norm_max = 0.12f32;
+    let mut frame_counter: u32 = 0;
 
     loop {
+        // quit
         if crossterm::event::poll(Duration::from_millis(0))? {
             if let crossterm::event::Event::Key(k) = crossterm::event::read()? {
                 if let crossterm::event::KeyCode::Char('q') = k.code { break; }
             }
         }
 
+        // frame pacing
         let now = Instant::now();
-        if now.duration_since(last) < target_dt { thread::sleep(Duration::from_millis(1)); continue; }
+        let dt = now.duration_since(last);
+        if dt < target_dt {
+            thread::sleep(target_dt - dt);
+            continue;
+        }
+        let dt_s = dt.as_secs_f32();
         last = now;
+        frame_counter = frame_counter.wrapping_add(1);
 
+        // layout
         let (w, h) = terminal::size()?;
         let lay = compute_layout(w);
-
         if filters.len() != lay.bars {
             filters = build_filterbank(sr, FFT_SIZE, lay.bars, FMIN, FMAX);
-            bars_state = vec![0.0; lay.bars];
+            bars_target = vec![0.0; lay.bars];
+            bars_y = vec![0.0; lay.bars];
+            bars_v = vec![0.0; lay.bars];
         }
 
+        // samples
         let samples = { shared.lock().unwrap().latest() };
         if samples.len() < FFT_SIZE { continue; }
         let tail = &samples[samples.len() - FFT_SIZE..];
 
-        // gate level in dB power
+        // gate
         let rms = tail.iter().map(|x| x * x).sum::<f32>() / FFT_SIZE as f32;
         let db = 10.0 * (rms.max(1e-12)).log10();
         let gate_open = db > SILENCE_DB;
@@ -302,60 +316,58 @@ fn main() -> Result<()> {
             tail.iter().zip(window.iter()).map(|(x, w)| Complex { re: x * w, im: 0.0 }).collect();
         fft.process(&mut buf);
 
+        // power -> EMA with time constant
         for i in 0..half {
             let re = buf[i].re; let im = buf[i].im;
             let p = (re * re + im * im) / (FFT_SIZE as f32 * FFT_SIZE as f32);
-            spec_pow_smooth[i] = SPEC_EMA * spec_pow_smooth[i] + (1.0 - SPEC_EMA) * p.max(1e-12);
+            spec_pow_smooth[i] = ema_tc(spec_pow_smooth[i], p.max(1e-12), TAU_SPEC, dt_s);
         }
 
         // band energies
-        let mut bar_vals = vec![0.0f32; lay.bars];
         for (i, tri) in filters.iter().enumerate() {
             let mut acc = 0.0f32;
             for &(idx, wgt) in &tri.taps { acc += spec_pow_smooth[idx] * wgt; }
             let amp = acc.sqrt();
             let v = (amp * LOG_COMP + 1.0).ln() / (LOG_COMP + 1.0).ln();
-            bar_vals[i] = if gate_open { v } else { 0.0 };
+            bars_target[i] = if gate_open { v } else { 0.0 };
         }
 
-        // 7-tap spatial smoothing
-        if lay.bars >= 7 {
-            let k = [1.0f32, 6.0, 15.0, 20.0, 15.0, 6.0, 1.0];
+        // spatial smoothing 9 tap
+        if lay.bars >= 9 {
+            let k = [1.0f32, 4.0, 11.0, 22.0, 27.0, 22.0, 11.0, 4.0, 1.0];
             let mut sm = vec![0.0f32; lay.bars];
             for i in 0..lay.bars {
                 let mut acc = 0.0; let mut wsum = 0.0;
                 for (j, wgt) in k.iter().enumerate() {
-                    let idx = (i as isize + j as isize - 3).clamp(0, (lay.bars - 1) as isize) as usize;
-                    acc += bar_vals[idx] * *wgt;
+                    let idx = (i as isize + j as isize - 4).clamp(0, (lay.bars - 1) as isize) as usize;
+                    acc += bars_target[idx] * *wgt;
                     wsum += *wgt;
                 }
                 sm[i] = acc / wsum;
             }
-            bar_vals = sm;
+            bars_target.copy_from_slice(&sm);
         }
 
-        // auto-gain with floor
-        let frame_max = bar_vals.iter().copied().fold(0.0f32, f32::max);
-        norm_max = NORM_EMA * norm_max + (1.0 - NORM_EMA) * frame_max.max(1e-6);
+        // auto gain with floor (time constant)
+        let frame_max = bars_target.iter().copied().fold(0.0f32, f32::max);
+        norm_max = ema_tc(norm_max, frame_max.max(1e-6), TAU_NORM, dt_s);
         let floor = norm_max * FLOOR_FRAC;
         let scale = (norm_max - floor).max(1e-6);
 
-        // temporal easing
+        // spring smoothing per bar: y'' = k(x - y) - c y'
+        let c = 2.0 * (SPR_K).sqrt() * SPR_ZETA;
         for i in 0..lay.bars {
-            let v = ((bar_vals[i] - floor) / scale).clamp(0.0, 1.0);
-            if v > bars_state[i] {
-                bars_state[i] = BAR_ATTACK * bars_state[i] + (1.0 - BAR_ATTACK) * v;
-            } else {
-                bars_state[i] = bars_state[i] * BAR_DECAY;
-                if v > bars_state[i] { bars_state[i] = v; }
-            }
+            let x = ((bars_target[i] - floor) / scale).clamp(0.0, 1.0);
+            let a = SPR_K * (x - bars_y[i]) - c * bars_v[i];
+            bars_v[i] += a * dt_s;
+            bars_y[i] = (bars_y[i] + bars_v[i] * dt_s).clamp(0.0, 1.0);
         }
 
-        // draw (Braille)
+        // draw
         queue!(out, terminal::Clear(ClearType::All), cursor::MoveTo(0, 0), SetForegroundColor(Color::White))?;
         let header = format!("  mycava  |  input: {}  |  q quits\n", name);
         out.write_all(header.as_bytes())?;
-        draw_braille(&mut out, &bars_state, w, h, &lay)?;
+        draw_braille(&mut out, &bars_y, w, h, &lay, frame_counter)?;
     }
 
     Ok(())
