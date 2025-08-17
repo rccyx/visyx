@@ -86,11 +86,4 @@ Currently, configuration is hardcoded in the source. You can modify the followin
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
-
-## Acknowledgments
-
-- Inspired by the C.A.V.A. (Console-based Audio Visualizer for ALSA) project
-- Uses the RustFFT library for Fourier transforms
-- Uses the CPAL library for cross-platform audio capture
-- Uses the Crossterm library for terminal rendering
+MIT
