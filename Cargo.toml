@@ -2,6 +2,12 @@
 name = "lookas"
 version = "0.1.0"
 edition = "2021"
+description = "A terminal-based audio spectrum visualizer written in Rust"
+license = "MIT"
+repository = "https://github.com/ashgw/lookas"
+readme = "README.md"
+keywords = ["audio", "visualization", "terminal", "spectrum", "fft"]
+categories = ["multimedia", "visualization", "command-line-utilities"]
 
 [dependencies]
 anyhow = "1.0"
