@@ -76,13 +76,29 @@ No additional dependencies required.
 
 ## Configuration
 
-Currently, configuration is hardcoded in the source. You can modify the following constants in `src/main.rs`:
+Lookas can be configured using environment variables. The default values are used if no environment variables are set.
 
-- `FMIN`: Minimum frequency to analyze (default: 30 Hz)
-- `FMAX`: Maximum frequency to analyze (default: 16,000 Hz)
-- `TARGET_FPS_MS`: Target frame rate in milliseconds (default: 16ms, ~60 FPS)
-- `FFT_SIZE`: Size of the FFT window (default: 2048)
-- `GATE_DB`: Noise gate threshold (default: -55 dB)
+| Environment Variable   | Description                                       | Default Value  |
+| ---------------------- | ------------------------------------------------- | -------------- |
+| `LOOKAS_FMIN`          | Minimum frequency to analyze                      | 30 Hz          |
+| `LOOKAS_FMAX`          | Maximum frequency to analyze                      | 16,000 Hz      |
+| `LOOKAS_TARGET_FPS_MS` | Target frame rate in milliseconds                 | 16ms (~60 FPS) |
+| `LOOKAS_FFT_SIZE`      | Size of the FFT window                            | 2048           |
+| `LOOKAS_GATE_DB`       | Noise gate threshold                              | -55 dB         |
+| `LOOKAS_TAU_SPEC`      | Spectrum smoothing time constant                  | 0.06           |
+| `LOOKAS_TILT_ALPHA`    | Frequency tilt factor (reduces low end dominance) | 0.30           |
+| `LOOKAS_FLOW_K`        | Lateral energy flow coefficient                   | 0.18           |
+| `LOOKAS_SPR_K`         | Spring stiffness for smooth motion                | 60.0           |
+| `LOOKAS_SPR_ZETA`      | Spring damping factor                             | 1.0            |
+
+### Example
+
+```bash
+# Run with custom settings
+LOOKAS_FMIN=50 LOOKAS_FMAX=12000 LOOKAS_GATE_DB=-60 lookas
+```
+
+You can also modify these values directly in the source code in `src/main.rs` if you prefer.
 
 ## License
 

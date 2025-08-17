@@ -20,24 +20,33 @@ use lookas::{
 };
 use rustfft::FftPlanner;
 use std::{
+    env,
     io::{stdout, Write},
     sync::{Arc, Mutex},
     thread,
     time::{Duration, Instant},
 };
 
+// Helper function to get environment variable as a specific type with default fallback
+fn get_env<T: std::str::FromStr>(name: &str, default: T) -> T {
+    match env::var(name) {
+        Ok(val) => val.parse::<T>().unwrap_or(default),
+        Err(_) => default,
+    }
+}
+
 fn main() -> Result<()> {
-    // Constants tuned to behave like CAVA without manual gain
-    const FMIN: f32 = 30.0;
-    const FMAX: f32 = 16_000.0;
-    const TARGET_FPS_MS: u64 = 16;
-    const FFT_SIZE: usize = 2048;
-    const TAU_SPEC: f32 = 0.06; // spectrum smoothing
-    const GATE_DB: f32 = -55.0; // ignore room hiss
-    const TILT_ALPHA: f32 = 0.30; // reduce low end dominance
-    const FLOW_K: f32 = 0.18; // lateral energy flow
-    const SPR_K: f32 = 60.0; // spring to keep motion smooth
-    const SPR_ZETA: f32 = 1.0;
+    // Get configuration from environment variables or use defaults
+    let fmin: f32 = get_env("LOOKAS_FMIN", 30.0);
+    let fmax: f32 = get_env("LOOKAS_FMAX", 16_000.0);
+    let target_fps_ms: u64 = get_env("LOOKAS_TARGET_FPS_MS", 16);
+    let fft_size: usize = get_env("LOOKAS_FFT_SIZE", 2048);
+    let tau_spec: f32 = get_env("LOOKAS_TAU_SPEC", 0.06); // spectrum smoothing
+    let gate_db: f32 = get_env("LOOKAS_GATE_DB", -55.0); // ignore room hiss
+    let tilt_alpha: f32 = get_env("LOOKAS_TILT_ALPHA", 0.30); // reduce low end dominance
+    let flow_k: f32 = get_env("LOOKAS_FLOW_K", 0.18); // lateral energy flow
+    let spr_k: f32 = get_env("LOOKAS_SPR_K", 60.0); // spring to keep motion smooth
+    let spr_zeta: f32 = get_env("LOOKAS_SPR_ZETA", 1.0);
 
     // TUI
     let mut out = stdout();
@@ -65,7 +74,7 @@ fn main() -> Result<()> {
     let cfg = best_config_for(&device)?;
     let sr = cfg.sample_rate.0 as f32;
 
-    let ring_len = (sr as usize / 10).max(FFT_SIZE * 3);
+    let ring_len = (sr as usize / 10).max(fft_size * 3);
     let shared = Arc::new(Mutex::new(SharedBuf::new(ring_len)));
     let stream = match device.default_input_config()?.sample_format()
     {
@@ -83,14 +92,14 @@ fn main() -> Result<()> {
     stream.play()?;
 
     // FFT
-    let window = hann(FFT_SIZE);
+    let window = hann(fft_size);
     let mut planner = FftPlanner::<f32>::new();
-    let fft = planner.plan_fft_forward(FFT_SIZE);
-    let half = FFT_SIZE / 2;
+    let fft = planner.plan_fft_forward(fft_size);
+    let half = fft_size / 2;
 
     // State
     let mut last = Instant::now();
-    let target_dt = Duration::from_millis(TARGET_FPS_MS);
+    let target_dt = Duration::from_millis(target_fps_ms);
     let mut analyzer = SpectrumAnalyzer::new(half);
 
     // Animation state
@@ -130,25 +139,25 @@ fn main() -> Result<()> {
         if analyzer.filters.len() != desired_bars {
             analyzer.filters = build_filterbank(
                 sr,
-                FFT_SIZE,
+                fft_size,
                 desired_bars,
-                FMIN,
-                FMAX,
+                fmin,
+                fmax,
             );
             analyzer.resize(desired_bars);
         }
 
         let samples = { shared.lock().unwrap().latest() };
-        if samples.len() < FFT_SIZE {
+        if samples.len() < fft_size {
             continue;
         }
-        let tail = &samples[samples.len() - FFT_SIZE..];
+        let tail = &samples[samples.len() - fft_size..];
 
         // gate on room noise
         let rms =
-            tail.iter().map(|x| x * x).sum::<f32>() / FFT_SIZE as f32;
+            tail.iter().map(|x| x * x).sum::<f32>() / fft_size as f32;
         let rms_db = 10.0 * (rms.max(1e-12)).log10();
-        let gate_open = rms_db > GATE_DB;
+        let gate_open = rms_db > gate_db;
 
         let mut buf = prepare_fft_input(tail, &window);
         fft.process(&mut buf);
@@ -159,17 +168,17 @@ fn main() -> Result<()> {
             let re = buf[i].re;
             let im = buf[i].im;
             spec_pow[i] = (re * re + im * im)
-                / (FFT_SIZE as f32 * FFT_SIZE as f32);
+                / (fft_size as f32 * fft_size as f32);
         }
 
-        analyzer.update_spectrum(&spec_pow, TAU_SPEC, dt_s);
+        analyzer.update_spectrum(&spec_pow, tau_spec, dt_s);
         let bars_target =
-            analyzer.analyze_bands(TILT_ALPHA, dt_s, gate_open);
+            analyzer.analyze_bands(tilt_alpha, dt_s, gate_open);
         analyzer.apply_flow_and_spring(
             &bars_target,
-            FLOW_K,
-            SPR_K,
-            SPR_ZETA,
+            flow_k,
+            spr_k,
+            spr_zeta,
             dt_s,
         );
 
