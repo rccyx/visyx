@@ -58,7 +58,7 @@ fn main() -> Result<()> {
         terminal::Clear(ClearType::All),
         SetForegroundColor(Color::White),
     )?;
-    
+
     let _cleanup = scopeguard::guard((), |_| {
         let mut out = stdout();
         let _ = execute!(
@@ -77,11 +77,18 @@ fn main() -> Result<()> {
 
     let ring_len = (sr as usize / 10).max(fft_size * 3);
     let shared = Arc::new(Mutex::new(SharedBuf::new(ring_len)));
-    
-    let stream = match device.default_input_config()?.sample_format() {
-        SampleFormat::F32 => build_stream::<f32>(device, cfg.clone(), shared.clone())?,
-        SampleFormat::I16 => build_stream::<i16>(device, cfg.clone(), shared.clone())?,
-        SampleFormat::U16 => build_stream::<u16>(device, cfg.clone(), shared.clone())?,
+
+    let stream = match device.default_input_config()?.sample_format()
+    {
+        SampleFormat::F32 => {
+            build_stream::<f32>(device, cfg.clone(), shared.clone())?
+        }
+        SampleFormat::I16 => {
+            build_stream::<i16>(device, cfg.clone(), shared.clone())?
+        }
+        SampleFormat::U16 => {
+            build_stream::<u16>(device, cfg.clone(), shared.clone())?
+        }
         _ => anyhow::bail!("Unsupported sample format"),
     };
     stream.play()?;
@@ -97,7 +104,7 @@ fn main() -> Result<()> {
     let target_dt = Duration::from_millis(target_fps_ms);
     let mut analyzer = SpectrumAnalyzer::new(half);
     let mut orient = Orient::Vertical;
-    
+
     // Pre-allocate buffers
     let mut buf = Vec::with_capacity(fft_size);
     let mut spec_pow = vec![0.0; half];
@@ -106,7 +113,9 @@ fn main() -> Result<()> {
     loop {
         // Handle user input
         if crossterm::event::poll(Duration::from_millis(0))? {
-            if let crossterm::event::Event::Key(k) = crossterm::event::read()? {
+            if let crossterm::event::Event::Key(k) =
+                crossterm::event::read()?
+            {
                 use crossterm::event::KeyCode::*;
                 match k.code {
                     Char('q') => return Ok(()),
@@ -153,11 +162,11 @@ fn main() -> Result<()> {
         } else {
             continue;
         };
-        
+
         if samples.len() < fft_size {
             continue;
         }
-        
+
         let tail = &samples[samples.len() - fft_size..];
 
         // Calculate RMS and apply gate
@@ -178,12 +187,14 @@ fn main() -> Result<()> {
         for i in 0..half {
             let re = buf[i].re;
             let im = buf[i].im;
-            spec_pow[i] = (re * re + im * im) / (fft_size as f32 * fft_size as f32);
+            spec_pow[i] = (re * re + im * im)
+                / (fft_size as f32 * fft_size as f32);
         }
 
         // Analyze spectrum
         analyzer.update_spectrum(&spec_pow, tau_spec, dt_s);
-        let bars_target = analyzer.analyze_bands(tilt_alpha, dt_s, gate_open);
+        let bars_target =
+            analyzer.analyze_bands(tilt_alpha, dt_s, gate_open);
         analyzer.apply_flow_and_spring(
             &bars_target,
             flow_k,
@@ -199,7 +210,7 @@ fn main() -> Result<()> {
             cursor::MoveTo(0, 0),
             SetForegroundColor(Color::White)
         )?;
-        
+
         header.clear();
         header.push_str("  lookas  |  input: ");
         header.push_str(&name);
@@ -209,11 +220,16 @@ fn main() -> Result<()> {
             Orient::Horizontal => "horizontal",
         });
         header.push_str("  |  auto gain window [");
-        
+
         use std::fmt::Write;
-        let _ = write!(header, "{:.1} dB .. {:.1} dB", analyzer.db_low - 3.0, analyzer.db_high + 6.0);
+        let _ = write!(
+            header,
+            "{:.1} dB .. {:.1} dB",
+            analyzer.db_low - 3.0,
+            analyzer.db_high + 6.0
+        );
         header.push_str("]  |  v/h to switch, q quits\n");
-        
+
         out.write_all(header.as_bytes())?;
 
         match orient {

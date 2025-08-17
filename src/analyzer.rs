@@ -68,10 +68,13 @@ impl SpectrumAnalyzer {
             }
             let amp = acc.sqrt();
 
-            let tilt = (tri.center_hz / 1000.0).max(0.001).powf(tilt_alpha);
+            let tilt =
+                (tri.center_hz / 1000.0).max(0.001).powf(tilt_alpha);
             let amp_tilted = amp * tilt;
 
-            self.eq_ref[i] = ema_tc(self.eq_ref[i], amp_tilted, 6.0, dt_s).max(1e-9);
+            self.eq_ref[i] =
+                ema_tc(self.eq_ref[i], amp_tilted, 6.0, dt_s)
+                    .max(1e-9);
             let rel = amp_tilted / self.eq_ref[i];
 
             db_per_band[i] = 20.0 * rel.max(1e-12).log10();
@@ -103,13 +106,15 @@ impl SpectrumAnalyzer {
         if db_per_band.is_empty() {
             return;
         }
-        
+
         let mut sorted = db_per_band.to_vec();
         sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
 
-        let idx_low = ((sorted.len() - 1) as f32 * 0.10).round() as usize;
-        let idx_high = ((sorted.len() - 1) as f32 * 0.90).round() as usize;
-        
+        let idx_low =
+            ((sorted.len() - 1) as f32 * 0.10).round() as usize;
+        let idx_high =
+            ((sorted.len() - 1) as f32 * 0.90).round() as usize;
+
         let q10 = sorted[idx_low];
         let q90 = sorted[idx_high];
 
@@ -130,8 +135,16 @@ impl SpectrumAnalyzer {
 
         // Calculate flow for all bars
         for i in 0..n {
-            let left = if i > 0 { self.bars_y[i - 1] } else { self.bars_y[i] };
-            let right = if i + 1 < n { self.bars_y[i + 1] } else { self.bars_y[i] };
+            let left = if i > 0 {
+                self.bars_y[i - 1]
+            } else {
+                self.bars_y[i]
+            };
+            let right = if i + 1 < n {
+                self.bars_y[i + 1]
+            } else {
+                self.bars_y[i]
+            };
             let flow = flow_k * (left + right - 2.0 * self.bars_y[i]);
             flowed[i] = (bars_target[i] + flow).clamp(0.0, 1.0);
         }
@@ -139,11 +152,13 @@ impl SpectrumAnalyzer {
         // Apply spring physics
         let c = 2.0 * spr_k.sqrt() * spr_zeta;
         let dt_s_sq = dt_s * dt_s;
-        
+
         for i in 0..n {
-            let a = spr_k * (flowed[i] - self.bars_y[i]) - c * self.bars_v[i];
+            let a = spr_k * (flowed[i] - self.bars_y[i])
+                - c * self.bars_v[i];
             self.bars_v[i] += a * dt_s;
-            self.bars_y[i] = (self.bars_y[i] + self.bars_v[i] * dt_s).clamp(0.0, 1.0);
+            self.bars_y[i] = (self.bars_y[i] + self.bars_v[i] * dt_s)
+                .clamp(0.0, 1.0);
         }
     }
 }

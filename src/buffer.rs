@@ -28,20 +28,20 @@ impl SharedBuf {
         } else {
             self.write_idx
         };
-        
+
         if len == 0 {
             return Vec::new();
         }
-        
+
         let mut result = Vec::with_capacity(len);
-        
+
         if self.filled {
             result.extend_from_slice(&self.data[self.write_idx..]);
             result.extend_from_slice(&self.data[..self.write_idx]);
         } else {
             result.extend_from_slice(&self.data[..self.write_idx]);
         }
-        
+
         result
     }
 }

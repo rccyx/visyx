@@ -24,7 +24,7 @@ pub fn build_filterbank(
     for i in 0..(bands + 2) {
         mel_points.push(mmin + (i as f32) * mel_step);
     }
-    
+
     // Convert to Hz
     let mut hz_points = Vec::with_capacity(bands + 2);
     for &mel in &mel_points {
@@ -57,9 +57,9 @@ pub fn build_filterbank(
         let l = bin_points[b];
         let c = bin_points[b + 1];
         let r = bin_points[b + 2];
-        
+
         let mut taps = Vec::with_capacity(r - l + 1);
-        
+
         // Left slope (ascending)
         let lc_diff = c - l;
         if lc_diff > 0 {
@@ -69,7 +69,7 @@ pub fn build_filterbank(
                 taps.push((i, w));
             }
         }
-        
+
         // Right slope (descending)
         let cr_diff = r - c;
         if cr_diff > 0 {
@@ -79,17 +79,18 @@ pub fn build_filterbank(
                 taps.push((i, w));
             }
         }
-        
+
         // Normalize weights
-        let sumw = taps.iter().map(|(_, w)| *w).sum::<f32>().max(1e-6);
+        let sumw =
+            taps.iter().map(|(_, w)| *w).sum::<f32>().max(1e-6);
         let inv_sumw = 1.0 / sumw;
         for t in &mut taps {
             t.1 *= inv_sumw;
         }
-        
+
         let center_hz = c as f32 * hz_per_bin;
         filters.push(Tri { taps, center_hz });
     }
-    
+
     filters
 }

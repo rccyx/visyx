@@ -59,30 +59,32 @@ pub fn draw_blocks_vertical(
     if rows == 0 {
         return Ok(());
     }
-    
+
     queue!(out, cursor::MoveTo(0, 1))?;
-    
+
     let mut line = String::with_capacity(w as usize + 1);
     for row_top in 0..rows {
         line.clear();
         let row_from_bottom = rows - 1 - row_top;
-        
+
         // Add left padding
         for _ in 0..lay.left_pad {
             line.push(' ');
         }
-        
+
         // Draw bars
         for (i, &v) in bars.iter().enumerate() {
             let v = v.clamp(0.0, 1.0);
             let cells = v * rows as f32;
             let full = cells.floor() as usize;
-            
+
             let ch = match row_from_bottom.cmp(&full) {
                 Ordering::Less => '█',
                 Ordering::Equal => {
-                    let frac = (cells - full as f32).clamp(0.0, 0.999_9);
-                    let threshold = BAYER8[row_top & 7][i & 7] as f32 / 64.0;
+                    let frac =
+                        (cells - full as f32).clamp(0.0, 0.999_9);
+                    let threshold =
+                        BAYER8[row_top & 7][i & 7] as f32 / 64.0;
                     let mut level = (frac * 8.0).floor();
                     if frac.fract() > threshold {
                         level += 1.0;
@@ -93,7 +95,7 @@ pub fn draw_blocks_vertical(
             };
             line.push(ch);
         }
-        
+
         // Add right padding
         for _ in 0..lay.right_pad {
             line.push(' ');
@@ -101,7 +103,7 @@ pub fn draw_blocks_vertical(
         line.push('\n');
         out.write_all(line.as_bytes())?;
     }
-    
+
     out.flush()?;
     Ok(())
 }
@@ -114,44 +116,46 @@ pub fn draw_blocks_horizontal(
     lay: &Layout,
 ) -> std::io::Result<()> {
     let rows = h.saturating_sub(3) as usize;
-    let usable_w = w.saturating_sub(lay.left_pad + lay.right_pad) as usize;
+    let usable_w =
+        w.saturating_sub(lay.left_pad + lay.right_pad) as usize;
     if rows == 0 || usable_w == 0 {
         return Ok(());
     }
 
     queue!(out, cursor::MoveTo(0, 1))?;
-    
+
     let mut line = String::with_capacity(w as usize + 1);
     let bars_len = bars.len();
-    
+
     for row in 0..rows {
         line.clear();
-        
+
         // Add left padding
         for _ in 0..lay.left_pad {
             line.push(' ');
         }
-        
+
         if row < bars_len {
             let v = bars[row].clamp(0.0, 1.0);
             let cells = v * usable_w as f32;
             let full = cells.floor() as usize;
-            
+
             // Draw full blocks
             for _ in 0..full {
                 line.push('█');
             }
-            
+
             // Draw partial block if needed
             if full < usable_w {
                 let frac = (cells - full as f32).clamp(0.0, 0.999_9);
-                let threshold = BAYER8[row & 7][full & 7] as f32 / 64.0;
+                let threshold =
+                    BAYER8[row & 7][full & 7] as f32 / 64.0;
                 let mut level = (frac * 8.0).floor();
                 if frac.fract() > threshold {
                     level += 1.0;
                 }
                 line.push(BLOCKS[level.clamp(0.0, 8.0) as usize]);
-                
+
                 // Fill remaining space with spaces
                 for _ in full + 1..usable_w {
                     line.push(' ');
@@ -163,16 +167,16 @@ pub fn draw_blocks_horizontal(
                 line.push(' ');
             }
         }
-        
+
         // Add right padding
         for _ in 0..lay.right_pad {
             line.push(' ');
         }
-        
+
         line.push('\n');
         out.write_all(line.as_bytes())?;
     }
-    
+
     out.flush()?;
     Ok(())
 }

@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 
 pub fn pick_input_device() -> Result<Device> {
     let host = cpal::default_host();
-    
+
     // First try to find a monitor device
     if let Ok(devices) = host.input_devices() {
         for dev in devices {
@@ -19,7 +19,7 @@ pub fn pick_input_device() -> Result<Device> {
             }
         }
     }
-    
+
     // Fall back to default device
     host.default_input_device()
         .context("No default input device")
@@ -41,7 +41,7 @@ where
 {
     let ch = cfg.channels as usize;
     let err_fn = |e| eprintln!("Stream error: {}", e);
-    
+
     let stream = device.build_input_stream(
         &cfg,
         move |data: &[T], _| {
@@ -60,6 +60,6 @@ where
         err_fn,
         None,
     )?;
-    
+
     Ok(stream)
 }

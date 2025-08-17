@@ -4,9 +4,7 @@ pub fn hann(n: usize) -> Vec<f32> {
     let den = (n.max(2) - 1) as f32;
     let pi2_div_den = 2.0 * std::f32::consts::PI / den;
     (0..n)
-        .map(|i| {
-            0.5 - 0.5 * f32::cos(pi2_div_den * i as f32)
-        })
+        .map(|i| 0.5 - 0.5 * f32::cos(pi2_div_den * i as f32))
         .collect()
 }
 
