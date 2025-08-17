@@ -36,7 +36,6 @@ fn get_env<T: std::str::FromStr>(name: &str, default: T) -> T {
 }
 
 fn main() -> Result<()> {
-    // Get configuration from environment variables or use defaults
     let fmin: f32 = get_env("LOOKAS_FMIN", 30.0);
     let fmax: f32 = get_env("LOOKAS_FMAX", 16_000.0);
     let target_fps_ms: u64 = get_env("LOOKAS_TARGET_FPS_MS", 16);
@@ -48,7 +47,6 @@ fn main() -> Result<()> {
     let spr_k: f32 = get_env("LOOKAS_SPR_K", 60.0);
     let spr_zeta: f32 = get_env("LOOKAS_SPR_ZETA", 1.0);
 
-    // TUI setup
     let mut out = stdout();
     terminal::enable_raw_mode()?;
     execute!(
