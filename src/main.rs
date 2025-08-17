@@ -1,21 +1,11 @@
 use anyhow::{Context, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, Sample, SampleFormat, SizedSample, StreamConfig};
-use crossterm::{
-    cursor, execute, queue,
-    style::{Color, SetForegroundColor},
-    terminal::{self, ClearType},
-};
+use crossterm::{cursor, execute, queue, style::SetForegroundColor, style::Color, terminal::{self, ClearType}};
 use rustfft::{num_complex::Complex, num_traits::ToPrimitive, FftPlanner};
-use std::{
-    env,
-    io::{stdout, Stdout, Write},
-    sync::{Arc, Mutex},
-    thread,
-    time::{Duration, Instant},
-};
+use std::{env, io::{stdout, Stdout, Write}, sync::{Arc, Mutex}, thread, time::{Duration, Instant}};
 
-/* =========================== Ring buffer =========================== */
+/* ---------------- Ring buffer ---------------- */
 
 struct SharedBuf {
     data: Vec<f32>,
@@ -23,20 +13,14 @@ struct SharedBuf {
     filled: bool,
 }
 impl SharedBuf {
-    fn new(cap: usize) -> Self {
-        Self { data: vec![0.0; cap], write_idx: 0, filled: false }
-    }
+    fn new(cap: usize) -> Self { Self { data: vec![0.0; cap], write_idx: 0, filled: false } }
     fn push(&mut self, x: f32) {
         self.data[self.write_idx] = x;
         self.write_idx = (self.write_idx + 1) % self.data.len();
-        if self.write_idx == 0 {
-            self.filled = true;
-        }
+        if self.write_idx == 0 { self.filled = true; }
     }
     fn latest(&self) -> Vec<f32> {
-        if !self.filled {
-            return self.data[..self.write_idx].to_vec();
-        }
+        if !self.filled { return self.data[..self.write_idx].to_vec(); }
         let mut v = Vec::with_capacity(self.data.len());
         v.extend_from_slice(&self.data[self.write_idx..]);
         v.extend_from_slice(&self.data[..self.write_idx]);
@@ -44,10 +28,12 @@ impl SharedBuf {
     }
 }
 
-/* ======================= Audio device helpers ====================== */
+/* ---------------- Audio device helpers ---------------- */
 
 fn pick_input_device() -> Result<Device> {
     let host = cpal::default_host();
+
+    // 1) explicit override
     if let Ok(want) = env::var("MYCAVA_DEVICE") {
         for dev in host.input_devices()? {
             if dev.name()?.to_lowercase().contains(&want.to_lowercase()) {
@@ -56,6 +42,19 @@ fn pick_input_device() -> Result<Device> {
         }
         anyhow::bail!("MYCAVA_DEVICE='{}' not found", want);
     }
+
+    // 2) prefer a PipeWire/ALSA monitor if present
+    let mut monitor: Option<Device> = None;
+    for dev in host.input_devices()? {
+        let name = dev.name().unwrap_or_else(|_| String::new()).to_lowercase();
+        if name.contains("monitor") || name.contains("monitor of") {
+            monitor = Some(dev);
+            break;
+        }
+    }
+    if let Some(d) = monitor { return Ok(d); }
+
+    // 3) fallback to default input
     host.default_input_device().context("No default input device")
 }
 
@@ -66,21 +65,17 @@ fn best_config_for(device: &Device) -> Result<StreamConfig> {
 }
 
 fn build_stream<T>(device: Device, cfg: StreamConfig, shared: Arc<Mutex<SharedBuf>>) -> Result<cpal::Stream>
-where
-    T: Sample + SizedSample + ToPrimitive,
-{
-    let channels = cfg.channels as usize;
+where T: Sample + SizedSample + ToPrimitive {
+    let ch = cfg.channels as usize;
     let err_fn = |e| eprintln!("Stream error: {}", e);
     let stream = device.build_input_stream(
         &cfg,
         move |data: &[T], _| {
             let mut buf = shared.lock().unwrap();
-            for frame in data.chunks_exact(channels) {
-                let mut acc: f32 = 0.0;
-                for &s in frame.iter() {
-                    acc += s.to_f32().unwrap_or(0.0);
-                }
-                buf.push(acc / channels as f32);
+            for frame in data.chunks_exact(ch) {
+                let mut acc = 0.0f32;
+                for &s in frame { acc += s.to_f32().unwrap_or(0.0); }
+                buf.push(acc / ch as f32);
             }
         },
         err_fn,
@@ -89,7 +84,7 @@ where
     Ok(stream)
 }
 
-/* ====================== Window and filterbank ====================== */
+/* ---------------- DSP helpers ---------------- */
 
 fn hann(n: usize) -> Vec<f32> {
     let nf = n as f32;
@@ -116,15 +111,12 @@ fn build_filterbank(sr: f32, fft_size: usize, bands: usize, fmin: f32, fmax: f32
     }
     let hz_points: Vec<f32> = mel_points.into_iter().map(mel_to_hz).collect();
 
-    let mut bin_points: Vec<usize> = hz_points
-        .iter()
-        .map(|&hz| {
-            let mut b = (hz / hz_per_bin).round() as isize;
-            if b < 1 { b = 1; }
-            if b as usize >= half { b = (half - 1) as isize; }
-            b as usize
-        })
-        .collect();
+    let mut bin_points: Vec<usize> = hz_points.iter().map(|&hz| {
+        let mut b = (hz / hz_per_bin).round() as isize;
+        if b < 1 { b = 1; }
+        if b as usize >= half { b = (half - 1) as isize; }
+        b as usize
+    }).collect();
 
     for i in 1..bin_points.len() {
         if bin_points[i] <= bin_points[i - 1] {
@@ -153,109 +145,111 @@ fn build_filterbank(sr: f32, fft_size: usize, bands: usize, fmin: f32, fmax: f32
     filters
 }
 
-/* ============================ Drawing ============================= */
+/* ---------------- Layout and drawing ---------------- */
 
-struct Layout { bars: usize, bar_w: u16, gap: u16 }
+struct Layout { bars: usize, bar_w: u16, gap: u16, left_pad: u16 }
 
 fn compute_layout(w: u16) -> Layout {
-    let target = 64usize;
+    // aim for 64 bars, degrade gracefully
+    let mut bars = 64usize;
+    let mut bar_w = 3u16;
     let gap = 1u16;
-    // try to give real width per bar, not 1 char
-    let max_bar_w = 3u16;
-    let mut bar_w = max_bar_w;
-    let mut bars = target;
+
     loop {
-        let needed = bars as u16 * bar_w + (bars.saturating_sub(1)) as u16 * gap + 2;
-        if needed <= w || bar_w == 1 { break; }
-        bar_w -= 1;
-        if needed > w && bar_w == 1 && bars > 48 { bars -= 8; }
+        let needed = bars as u16 * bar_w + (bars.saturating_sub(1)) as u16 * gap;
+        if needed + 2 <= w { // leave margin for safety
+            let left_pad = (w - needed) / 2;
+            return Layout { bars, bar_w, gap, left_pad };
+        }
+        if bar_w > 1 { bar_w -= 1; continue; }
+        if bars > 32 { bars -= 8; continue; }
+        let left_pad = 1;
+        return Layout { bars, bar_w, gap, left_pad };
     }
-    Layout { bars, bar_w, gap }
 }
 
 fn draw_frame(out: &mut Stdout, bars: &[f32], peaks: &[u16], w: u16, h: u16, lay: &Layout) -> std::io::Result<()> {
     let max_h = h.saturating_sub(3);
     queue!(out, cursor::MoveTo(0, 1))?;
-    let mut line = String::with_capacity((w as usize) * (max_h as usize + 2));
+    let mut rowbuf = String::with_capacity(w as usize + 8);
 
     for row in (0..max_h).rev() {
-        line.push(' ');
-        let mut col = 0u16;
+        rowbuf.clear();
+        // left padding
+        for _ in 0..lay.left_pad { rowbuf.push(' '); }
+
+        // bar area
         for i in 0..lay.bars.min(bars.len()) {
             let v = bars[i].clamp(0.0, 1.0);
             let filled = (v * max_h as f32).round() as u16;
 
+            // bar columns
             for _ in 0..lay.bar_w {
-                if filled > row {
-                    // simple gradient by band index
-                    let t = i as f32 / lay.bars as f32;
-                    let r = (80.0 + 120.0 * t) as u8;
-                    let g = (140.0 + 80.0 * (1.0 - t)) as u8;
-                    let b = (220.0) as u8;
-                    queue!(out, SetForegroundColor(Color::Rgb { r, g, b }))?;
-                    line.push('█');
-                } else {
-                    line.push(' ');
-                }
-                col += 1;
+                if filled > row { rowbuf.push('█'); } else { rowbuf.push(' '); }
             }
 
-            // peak marker
+            // peak marker sits on top of each bar
             if peaks[i] > row {
-                queue!(out, SetForegroundColor(Color::White))?;
-                line.pop();
-                line.push('▀');
+                // overwrite the last column of the bar with a thin mark
+                if let Some(last) = rowbuf.pop() {
+                    let _ = last;
+                    rowbuf.push('▀');
+                } else {
+                    rowbuf.push('▀');
+                }
             }
 
-            for _ in 0..lay.gap { line.push(' '); col += 1; }
+            // gap
+            for _ in 0..lay.gap { rowbuf.push(' '); }
         }
-        line.push('\n');
+
+        // pad the rest of the line to full width
+        while rowbuf.chars().count() < w as usize { rowbuf.push(' '); }
+        rowbuf.push('\n');
+        out.write_all(rowbuf.as_bytes())?;
     }
 
-    // baseline
-    line.push(' ');
-    for _ in 0..(w.saturating_sub(2)) { line.push('▁'); }
-    line.push('\n');
-
-    out.write_all(line.as_bytes())?;
+    // baseline - full width
+    let mut base = String::with_capacity(w as usize + 2);
+    for _ in 0..w { base.push('─'); }
+    base.push('\n');
+    out.write_all(base.as_bytes())?;
     out.flush()?;
     Ok(())
 }
 
-/* ============================= Main =============================== */
+/* ---------------- Main ---------------- */
 
 fn main() -> Result<()> {
     // Tunables
     const FMIN: f32 = 30.0;
     const FMAX: f32 = 16_000.0;
-    const TARGET_FPS_MS: u64 = 16; // ~60 FPS
+    const TARGET_FPS_MS: u64 = 16;
     const FFT_SIZE: usize = 2048;
-    const SPEC_EMA: f32 = 0.78;    // spectrum smoothing
-    const BAR_ATTACK: f32 = 0.55;  // faster rise
-    const BAR_DECAY: f32 = 0.90;   // slower fall
-    const NORM_EMA: f32 = 0.92;    // stable auto-gain
-    const LOG_COMP: f32 = 220.0;   // log compression
-    const FLOOR_FRAC: f32 = 0.06;  // noise floor
-    const GATE_THRESH: f32 = 0.003; // ~-50 dBFS
-    const PEAK_HOLD_MS: u64 = 280;
+
+    const SPEC_EMA: f32 = 0.78;
+    const BAR_ATTACK: f32 = 0.55;
+    const BAR_DECAY: f32 = 0.90;
+    const NORM_EMA: f32 = 0.92;
+    const LOG_COMP: f32 = 220.0;
+    const FLOOR_FRAC: f32 = 0.06;
+
+    // correct dB gate -60 dB relative to full scale
+    const SILENCE_DB: f32 = -60.0;
+    const PEAK_HOLD_MS: u64 = 250;
     const PEAK_FALL: u16 = 1;
 
+    // TUI setup
     let mut out = stdout();
     terminal::enable_raw_mode()?;
-    execute!(
-        out,
-        terminal::EnterAlternateScreen,
-        cursor::Hide,
-        terminal::Clear(ClearType::All),
-        SetForegroundColor(Color::White),
-    )?;
+    execute!(out, terminal::EnterAlternateScreen, cursor::Hide, terminal::Clear(ClearType::All), SetForegroundColor(Color::White))?;
     let _cleanup = scopeguard::guard((), |_| {
         let mut out = stdout();
         let _ = execute!(out, cursor::Show, terminal::LeaveAlternateScreen);
         let _ = terminal::disable_raw_mode();
     });
 
-    // Audio init
+    // Audio
     let device = pick_input_device()?;
     let name = device.name().unwrap_or_else(|_| "<unknown>".into());
     let cfg = best_config_for(&device)?;
@@ -271,7 +265,7 @@ fn main() -> Result<()> {
     };
     stream.play()?;
 
-    // FFT setup
+    // FFT
     let window = hann(FFT_SIZE);
     let mut planner = FftPlanner::<f32>::new();
     let fft = planner.plan_fft_forward(FFT_SIZE);
@@ -284,13 +278,8 @@ fn main() -> Result<()> {
     let mut bars_state: Vec<f32> = Vec::new();
     let mut filters: Vec<Tri> = Vec::new();
     let mut norm_max = 0.1f32;
-
-    // peaks
     let mut peaks: Vec<u16> = Vec::new();
     let mut peaks_timer: Vec<Instant> = Vec::new();
-
-    // gate
-    let mut gate_open = false;
 
     loop {
         if crossterm::event::poll(Duration::from_millis(0))? {
@@ -306,7 +295,6 @@ fn main() -> Result<()> {
         }
         last = now;
 
-        // layout and bands
         let (w, h) = terminal::size()?;
         let lay = compute_layout(w);
 
@@ -317,24 +305,19 @@ fn main() -> Result<()> {
             peaks_timer = vec![Instant::now(); lay.bars];
         }
 
-        // samples
         let samples = { shared.lock().unwrap().latest() };
         if samples.len() < FFT_SIZE { continue; }
         let tail = &samples[samples.len() - FFT_SIZE..];
 
-        // quick gate on input level
+        // dBFS (10*log10 of power)
         let rms = tail.iter().map(|x| x * x).sum::<f32>() / FFT_SIZE as f32;
-        gate_open = rms >= GATE_THRESH;
+        let db = 10.0 * (rms.max(1e-12)).log10();
+        let gate_open = db > SILENCE_DB;
 
         // FFT
-        let mut buf: Vec<Complex<f32>> = tail
-            .iter()
-            .zip(window.iter())
-            .map(|(x, w)| Complex { re: x * w, im: 0.0 })
-            .collect();
+        let mut buf: Vec<Complex<f32>> = tail.iter().zip(window.iter()).map(|(x, w)| Complex { re: x * w, im: 0.0 }).collect();
         fft.process(&mut buf);
 
-        // power spectrum smoothing
         for i in 0..half {
             let re = buf[i].re;
             let im = buf[i].im;
@@ -342,43 +325,38 @@ fn main() -> Result<()> {
             spec_pow_smooth[i] = SPEC_EMA * spec_pow_smooth[i] + (1.0 - SPEC_EMA) * p.max(1e-12);
         }
 
-        // bars
+        // bands
         let mut bar_vals = vec![0.0f32; lay.bars];
         for (i, tri) in filters.iter().enumerate() {
             let mut acc = 0.0f32;
             for &(idx, wgt) in &tri.taps { acc += spec_pow_smooth[idx] * wgt; }
             let amp = acc.sqrt();
             let v = (amp * LOG_COMP + 1.0).ln() / (LOG_COMP + 1.0).ln();
-            bar_vals[i] = v;
+            bar_vals[i] = if gate_open { v } else { 0.0 };
         }
 
-        // spatial smooth
+        // slight spatial smooth
         for i in 1..(lay.bars - 1) {
             bar_vals[i] = (bar_vals[i - 1] + 2.0 * bar_vals[i] + bar_vals[i + 1]) * 0.25;
         }
 
-        // auto gain
-        let frame_max = bar_vals.iter().cloned().fold(0.0, f32::max);
+        // normalize with floor
+        let frame_max = bar_vals.iter().cloned().fold(0.0f32, f32::max);
         norm_max = NORM_EMA * norm_max + (1.0 - NORM_EMA) * frame_max.max(1e-6);
         let floor = norm_max * FLOOR_FRAC;
         let scale = (norm_max - floor).max(1e-6);
 
-        if !gate_open {
-            for v in &mut bar_vals { *v = 0.0; }
-        }
-
-        // attack/decay + normalize
         let max_h = h.saturating_sub(3);
         for i in 0..lay.bars {
             let v = ((bar_vals[i] - floor) / scale).clamp(0.0, 1.0);
             if v > bars_state[i] {
                 bars_state[i] = BAR_ATTACK * bars_state[i] + (1.0 - BAR_ATTACK) * v;
             } else {
-                bars_state[i] = bars_state[i] * BAR_DECAY;
+                bars_state[i] *= BAR_DECAY;
                 if v > bars_state[i] { bars_state[i] = v; }
             }
 
-            // peak hold/fall
+            // peaks
             let cur_h = (bars_state[i] * max_h as f32).round() as u16;
             if cur_h > peaks[i] {
                 peaks[i] = cur_h;
@@ -390,8 +368,8 @@ fn main() -> Result<()> {
 
         // draw
         queue!(out, terminal::Clear(ClearType::All), cursor::MoveTo(0, 0))?;
-        let header = format!("  mycava  |  input: {}  |  q to quit{}\n",
-                             name, if gate_open { "" } else { "  [silence]" });
+        let header = format!("  mycava  |  input: {}  |  rate: {} Hz  |  level: {:>5.1} dB  |  q to quit\n",
+                             name, sr as u32, db);
         out.write_all(header.as_bytes())?;
         draw_frame(&mut out, &bars_state, &peaks, w, h, &lay)?;
     }
@@ -399,21 +377,14 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-/* =========================== Scopeguard =========================== */
+/* ---------------- Scopeguard ---------------- */
 
 mod scopeguard {
-    pub fn guard<T, F: FnOnce(T)>(v: T, f: F) -> Guard<T, F> {
-        Guard { v: Some(v), f: Some(f) }
-    }
-    pub struct Guard<T, F: FnOnce(T)> {
-        v: Option<T>,
-        f: Option<F>,
-    }
+    pub fn guard<T, F: FnOnce(T)>(v: T, f: F) -> Guard<T, F> { Guard { v: Some(v), f: Some(f) } }
+    pub struct Guard<T, F: FnOnce(T)> { v: Option<T>, f: Option<F> }
     impl<T, F: FnOnce(T)> Drop for Guard<T, F> {
         fn drop(&mut self) {
-            if let (Some(v), Some(f)) = (self.v.take(), self.f.take()) {
-                f(v);
-            }
+            if let (Some(v), Some(f)) = (self.v.take(), self.f.take()) { f(v); }
         }
     }
 }
