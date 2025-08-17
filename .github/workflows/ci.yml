@@ -25,10 +25,11 @@ jobs:
     secrets: inherit
 
   build:
-s    uses: ./.github/workflows/on-workflow-call-build.yml
+    uses: ./.github/workflows/on-workflow-call-build.yml
     secrets: inherit
 
   release:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: [format, build, lint]
     uses: ./.github/workflows/on-workflow-call-release.yml
     secrets: inherit

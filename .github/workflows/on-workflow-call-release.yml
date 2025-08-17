@@ -6,4 +6,14 @@ on:
 jobs:
   release:
     runs-on: ubuntu-latest
+    environment: release
     steps:
+      - name: Checkout sources
+        uses: actions/checkout@v4
+      - name: Install stable toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+      - run: cargo publish --token ${{ secrets.CRATES_TOKEN }}

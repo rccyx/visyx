@@ -7,3 +7,21 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v3
+
+      - name: install rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+      - name: Setup conventional commits
+        run: bash ./scripts/conventional-commits
+      - uses: pre-commit/action@v3.0.0
+        with:
+          extra_args: --all-files --verbose
+        env:
+          PRE_COMMIT_COLOR: always
+          SKIP: test
+
+      - run: cargo clippy -- -D warnings -A incomplete_features -W clippy::dbg_macro -W clippy::print_stdout
