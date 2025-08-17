@@ -40,10 +40,10 @@ impl SpectrumAnalyzer {
         dt_s: f32,
     ) {
         let len = self.spec_pow_smooth.len().min(spec_pow.len());
-        for i in 0..len {
+        for (i, &pow) in spec_pow.iter().enumerate().take(len) {
             self.spec_pow_smooth[i] = ema_tc(
                 self.spec_pow_smooth[i],
-                spec_pow[i].max(1e-12),
+                pow.max(1e-12),
                 tau_spec,
                 dt_s,
             );
@@ -151,10 +151,10 @@ impl SpectrumAnalyzer {
 
         // Apply spring physics
         let c = 2.0 * spr_k.sqrt() * spr_zeta;
-        let dt_s_sq = dt_s * dt_s;
+        // Removed unused variable dt_s_sq
 
-        for i in 0..n {
-            let a = spr_k * (flowed[i] - self.bars_y[i])
+        for (i, &flowed_val) in flowed.iter().enumerate().take(n) {
+            let a = spr_k * (flowed_val - self.bars_y[i])
                 - c * self.bars_v[i];
             self.bars_v[i] += a * dt_s;
             self.bars_y[i] = (self.bars_y[i] + self.bars_v[i] * dt_s)
