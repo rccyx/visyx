@@ -21,19 +21,9 @@ Lookas is a lightweight audio spectrum analyzer that displays real-time audio vi
 cargo install lookas
 ```
 
-### From source
-
-```
-git clone git@github.com:ashgw/lookas.git
-cd lookas
-cargo build --release
-```
-
-The binary will be available at `target/release/lookas`.
-
 ## Usage
 
-Run the program:
+Simply run the binary:
 
 ```
 lookas
@@ -45,7 +35,7 @@ lookas
 - `h`: Switch to horizontal visualization mode
 - `q`: Quit the application
 
-## Requirements
+## Needed
 
 - Rust 1.70 or higher
 - ALSA development libraries (Linux)
@@ -58,14 +48,6 @@ lookas
 sudo apt install libasound2-dev # on your preferred package manager
 ```
 
-### macOS Dependencies
-
-No additional dependencies required.
-
-### Windows Dependencies
-
-No additional dependencies required.
-
 ## How It Works
 
 1. Audio is captured from the default input device or a monitor device if available
@@ -76,7 +58,7 @@ No additional dependencies required.
 
 ## Configuration
 
-Lookas can be configured using environment variables. The default values are used if no environment variables are set.
+You can configure it using environment variables. The default values are used if no environment variables are set.
 
 | Environment Variable   | Description                                       | Default Value  |
 | ---------------------- | ------------------------------------------------- | -------------- |
@@ -98,8 +80,6 @@ Lookas can be configured using environment variables. The default values are use
 LOOKAS_FMIN=50 LOOKAS_FMAX=12000 LOOKAS_GATE_DB=-60 lookas
 ```
 
-You can also modify these values directly in the source code in `src/main.rs` if you prefer.
-
 ## License
 
-MIT
+[MIT](/LICENSE)
