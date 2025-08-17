@@ -156,10 +156,81 @@ fn build_filterbank(sr: f32, fft_size: usize, bands: usize, fmin: f32, fmax: f32
     filters
 }
 
-/* ============================ Braille draw ========================= */
-/* vertical, symmetric fill to avoid diagonal lean */
+/* ===================== High-PPI BLOCK renderer ===================== */
+/* Uses U+2581..U+2588 with ordered Bayer dithering for sub-8 levels. */
 
-// pair bits per full row from bottom: rows 0..3 => (7,8), (3,6), (2,5), (1,4)
+const BLOCKS: [char; 9] = [' ', '▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+const BAYER8: [[u8; 8]; 8] = [
+    [ 0,48,12,60, 3,51,15,63],
+    [32,16,44,28,35,19,47,31],
+    [ 8,56, 4,52,11,59, 7,55],
+    [40,24,36,20,43,27,39,23],
+    [ 2,50,14,62, 1,49,13,61],
+    [34,18,46,30,33,17,45,29],
+    [10,58, 6,54, 9,57, 5,53],
+    [42,26,38,22,41,25,37,21],
+];
+
+struct Layout { bars: usize, gap: u16, left_pad: u16 }
+fn compute_layout(w: u16) -> Layout {
+    // Dense: 1 cell per bar, zero gap, small margin
+    let margin = 1u16;
+    let avail = w.saturating_sub(margin);
+    let bars_fit = avail.max(10) as usize;
+    Layout { bars: bars_fit, gap: 0, left_pad: 0 }
+}
+
+fn draw_blocks(
+    out: &mut Stdout,
+    bars: &[f32],
+    w: u16,
+    h: u16,
+) -> std::io::Result<()> {
+    let rows = h.saturating_sub(3) as usize;
+    if rows == 0 { return Ok(()); }
+
+    queue!(out, cursor::MoveTo(0, 1))?;
+
+    for row_top in 0..rows {
+        let row_from_bottom = rows - 1 - row_top;
+        let mut line = String::with_capacity(w as usize);
+        let mut col_count = 0usize;
+
+        for i in 0..w as usize {
+            let idx = i.min(bars.len().saturating_sub(1));
+            let v = bars[idx].clamp(0.0, 1.0);
+            let cells = v * rows as f32;
+
+            let full = cells.floor() as usize;
+            let frac = (cells - full as f32).clamp(0.0, 0.999_9);
+
+            let ch = if row_from_bottom < full {
+                '█'
+            } else if row_from_bottom == full {
+                // dither the fractional step to beat the 1/8 limit
+                let threshold = BAYER8[row_top & 7][i & 7] as f32 / 64.0;
+                let mut level = (frac * 8.0).floor();
+                if frac.fract() > threshold { level += 1.0; }
+                let level = level.clamp(0.0, 8.0) as usize;
+                BLOCKS[level]
+            } else {
+                ' '
+            };
+
+            line.push(ch);
+            col_count += 1;
+        }
+        line.push('\n');
+        out.write_all(line.as_bytes())?;
+    }
+
+    out.flush()?;
+    Ok(())
+}
+
+/* ============================ Braille draw ========================= */
+/* Kept as an alternate mode. Vertical, symmetric fill. */
+
 #[inline]
 fn braille_pair_mask(row_from_bottom: u8) -> u16 {
     match row_from_bottom {
@@ -196,24 +267,12 @@ fn braille_from_rem(rem: i32, rng: &mut u32) -> char {
     char::from_u32(0x2800 + bits as u32).unwrap()
 }
 
-struct Layout { bars: usize, gap: u16, left_pad: u16 }
-fn compute_layout(w: u16) -> Layout {
-    let margin = 2u16;
-    let gap = 1u16;
-    let avail = w.saturating_sub(margin);
-    let stride = 1 + gap;
-    let bars_fit = (avail / stride).max(10) as usize;
-    let used = bars_fit as u16 * stride - gap;
-    let left_pad = w.saturating_sub(used) / 2;
-    Layout { bars: bars_fit, gap, left_pad }
-}
-
 fn draw_braille(
     out: &mut Stdout,
     bars: &[f32],
     w: u16,
     h: u16,
-    lay: &Layout,
+    bars_count: usize,
     phase: u32,
 ) -> std::io::Result<()> {
     let rows = h.saturating_sub(3) as usize;
@@ -222,11 +281,11 @@ fn draw_braille(
     queue!(out, cursor::MoveTo(0, 1))?;
 
     for row_top in 0..rows {
-        let mut line = String::with_capacity(w as usize);
-        for _ in 0..lay.left_pad { line.push(' '); }
         let row_from_bottom = rows - 1 - row_top;
+        let mut line = String::with_capacity(w as usize);
+        let mut count = 0usize;
 
-        for i in 0..lay.bars.min(bars.len()) {
+        for i in 0..bars_count.min(bars.len()) {
             let v = bars[i].clamp(0.0, 1.0);
             let dots_total = (v * (rows as f32 * 8.0)).round() as i32;
             let rem = dots_total - (row_from_bottom as i32) * 8;
@@ -237,15 +296,13 @@ fn draw_braille(
 
             let ch = braille_from_rem(rem, &mut rng);
             line.push(ch);
-            for _ in 0..lay.gap { line.push(' '); }
+            count += 1;
         }
-
-        while line.chars().count() < w as usize { line.push(' '); }
+        while count < w as usize { line.push(' '); count += 1; }
         line.push('\n');
         out.write_all(line.as_bytes())?;
     }
 
-    // removed baseline line
     out.flush()?;
     Ok(())
 }
@@ -321,6 +378,9 @@ fn main() -> Result<()> {
 
     let mut norm_max = 0.12f32;
     let mut frame_counter: u32 = 0;
+
+    // mode
+    let render_mode = env::var("LOOKAS_RENDER").unwrap_or_else(|_| "blocks".into());
 
     loop {
         if crossterm::event::poll(Duration::from_millis(0))? {
@@ -404,13 +464,28 @@ fn main() -> Result<()> {
             bars_y[i] = (bars_y[i] + bars_v[i] * dt_s).clamp(0.0, 1.0);
         }
 
-        queue!(out, terminal::Clear(ClearType::All), cursor::MoveTo(0, 0), SetForegroundColor(Color::White))?;
-        let header = format!("  lookas  |  input: {}  |  q quits\n", name);
+        queue!(
+            out,
+            terminal::Clear(ClearType::All),
+            cursor::MoveTo(0, 0),
+            SetForegroundColor(Color::White)
+        )?;
+        let header = format!(
+            "  lookas  |  input: {}  |  renderer: {}  |  q quits\n",
+            name,
+            if render_mode == "braille" { "braille" } else { "blocks" }
+        );
         out.write_all(header.as_bytes())?;
-        draw_braille(&mut out, &bars_y, w, h, &lay, frame_counter)?;
+
+        if render_mode == "braille" {
+            draw_braille(&mut out, &bars_y, w, h, lay.bars, frame_counter)?;
+        } else {
+            draw_blocks(&mut out, &bars_y, w, h)?;
+        }
     }
 
-    Ok(())
+    // never reached
+    // Ok(())
 }
 
 /* =========================== Scopeguard =========================== */
