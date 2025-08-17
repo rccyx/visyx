@@ -16,16 +16,24 @@ use std::{
 };
 
 /* =========================== Ring buffer =========================== */
-struct SharedBuf { data: Vec<f32>, write_idx: usize, filled: bool }
+struct SharedBuf {
+    data: Vec<f32>,
+    write_idx: usize,
+    filled: bool,
+}
 impl SharedBuf {
-    fn new(cap: usize) -> Self { Self { data: vec![0.0; cap], write_idx: 0, filled: false } }
+    fn new(cap: usize) -> Self {
+        Self { data: vec![0.0; cap], write_idx: 0, filled: false }
+    }
     fn push(&mut self, x: f32) {
         self.data[self.write_idx] = x;
         self.write_idx = (self.write_idx + 1) % self.data.len();
         if self.write_idx == 0 { self.filled = true; }
     }
     fn latest(&self) -> Vec<f32> {
-        if !self.filled { return self.data[..self.write_idx].to_vec(); }
+        if !self.filled {
+            return self.data[..self.write_idx].to_vec();
+        }
         let mut v = Vec::with_capacity(self.data.len());
         v.extend_from_slice(&self.data[self.write_idx..]);
         v.extend_from_slice(&self.data[..self.write_idx]);
@@ -38,7 +46,9 @@ fn pick_input_device() -> Result<Device> {
     let host = cpal::default_host();
     if let Ok(want) = env::var("MYCAVA_DEVICE") {
         for dev in host.input_devices()? {
-            if dev.name()?.to_lowercase().contains(&want.to_lowercase()) { return Ok(dev); }
+            if dev.name()?.to_lowercase().contains(&want.to_lowercase()) {
+                return Ok(dev);
+            }
         }
         anyhow::bail!("MYCAVA_DEVICE='{}' not found", want);
     }
@@ -53,8 +63,14 @@ fn best_config_for(device: &Device) -> Result<StreamConfig> {
     cfg.sample_rate.0 = cfg.sample_rate.0.clamp(44_100, 48_000);
     Ok(cfg)
 }
-fn build_stream<T>(device: Device, cfg: StreamConfig, shared: Arc<Mutex<SharedBuf>>) -> Result<cpal::Stream>
-where T: Sample + SizedSample + ToPrimitive {
+fn build_stream<T>(
+    device: Device,
+    cfg: StreamConfig,
+    shared: Arc<Mutex<SharedBuf>>,
+) -> Result<cpal::Stream>
+where
+    T: Sample + SizedSample + ToPrimitive,
+{
     let ch = cfg.channels as usize;
     let err_fn = |e| eprintln!("Stream error: {}", e);
     let stream = device.build_input_stream(
@@ -63,7 +79,9 @@ where T: Sample + SizedSample + ToPrimitive {
             let mut buf = shared.lock().unwrap();
             for frame in data.chunks_exact(ch) {
                 let mut acc = 0.0f32;
-                for &s in frame { acc += s.to_f32().unwrap_or(0.0); }
+                for &s in frame {
+                    acc += s.to_f32().unwrap_or(0.0);
+                }
                 buf.push(acc / ch as f32);
             }
         },
@@ -78,7 +96,8 @@ fn hann(n: usize) -> Vec<f32> {
     let den = (n.max(2) - 1) as f32;
     (0..n).map(|i| 0.5 - 0.5 * f32::cos(2.0 * std::f32::consts::PI * i as f32 / den)).collect()
 }
-#[inline] fn ema_tc(prev: f32, x: f32, tau_s: f32, dt_s: f32) -> f32 {
+#[inline]
+fn ema_tc(prev: f32, x: f32, tau_s: f32, dt_s: f32) -> f32 {
     let a = (-dt_s / tau_s).exp();
     a * prev + (1.0 - a) * x
 }
@@ -100,12 +119,16 @@ fn build_filterbank(sr: f32, fft_size: usize, bands: usize, fmin: f32, fmax: f32
     }
     let hz_points: Vec<f32> = mel_points.into_iter().map(mel_to_hz).collect();
 
-    let mut bin_points: Vec<usize> = hz_points.iter().map(|&hz| {
-        let mut b = (hz / hz_per_bin).round() as isize;
-        if b < 1 { b = 1; }
-        if b as usize >= half { b = (half - 1) as isize; }
-        b as usize
-    }).collect();
+    let mut bin_points: Vec<usize> = hz_points
+        .iter()
+        .map(|&hz| {
+            let mut b = (hz / hz_per_bin).round() as isize;
+            if b < 1 { b = 1; }
+            if b as usize >= half { b = (half - 1) as isize; }
+            b as usize
+        })
+        .collect();
+
     for i in 1..bin_points.len() {
         if bin_points[i] <= bin_points[i - 1] {
             bin_points[i] = (bin_points[i - 1] + 1).min(half - 1);
@@ -134,13 +157,45 @@ fn build_filterbank(sr: f32, fft_size: usize, bands: usize, fmin: f32, fmax: f32
 }
 
 /* ============================ Braille draw ========================= */
-fn braille_from_bottom_dots(n: u8) -> char {
-    if n == 0 { return ' '; }
-    let order = [0x40u16, 0x80, 0x04, 0x20, 0x02, 0x10, 0x01, 0x08];
+/* vertical, symmetric fill to avoid diagonal lean */
+
+// pair bits per full row from bottom: rows 0..3 => (7,8), (3,6), (2,5), (1,4)
+#[inline]
+fn braille_pair_mask(row_from_bottom: u8) -> u16 {
+    match row_from_bottom {
+        0 => 0x40 | 0x80, // 7,8
+        1 => 0x04 | 0x20, // 3,6
+        2 => 0x02 | 0x10, // 2,5
+        _ => 0x01 | 0x08, // 1,4
+    }
+}
+#[inline]
+fn braille_half_mask(row_from_bottom: u8, left: bool) -> u16 {
+    match (row_from_bottom, left) {
+        (0, true) => 0x40, (0, false) => 0x80,
+        (1, true) => 0x04, (1, false) => 0x20,
+        (2, true) => 0x02, (2, false) => 0x10,
+        (3, true) => 0x01, (3, false) => 0x08,
+        _ => 0,
+    }
+}
+#[inline]
+fn braille_from_rem(rem: i32, rng: &mut u32) -> char {
+    if rem <= 0 { return ' '; }
+    if rem >= 8 { return '\u{28FF}'; }
+    let full_rows = (rem / 2).clamp(0, 4);
+    let half = rem & 1;
+
     let mut bits: u16 = 0;
-    for i in 0..n.min(8) as usize { bits |= order[i]; }
+    for r in 0..full_rows { bits |= braille_pair_mask(r as u8); }
+    if half == 1 {
+        *rng = rng.wrapping_mul(1664525).wrapping_add(1013904223);
+        let left = (*rng >> 31) == 0;
+        bits |= braille_half_mask(full_rows as u8, left);
+    }
     char::from_u32(0x2800 + bits as u32).unwrap()
 }
+
 struct Layout { bars: usize, gap: u16, left_pad: u16 }
 fn compute_layout(w: u16) -> Layout {
     let margin = 2u16;
@@ -152,13 +207,19 @@ fn compute_layout(w: u16) -> Layout {
     let left_pad = w.saturating_sub(used) / 2;
     Layout { bars: bars_fit, gap, left_pad }
 }
-fn draw_braille(out: &mut Stdout, bars: &[f32], w: u16, h: u16, lay: &Layout, phase: u32) -> std::io::Result<()> {
+
+fn draw_braille(
+    out: &mut Stdout,
+    bars: &[f32],
+    w: u16,
+    h: u16,
+    lay: &Layout,
+    phase: u32,
+) -> std::io::Result<()> {
     let rows = h.saturating_sub(3) as usize;
     if rows == 0 { return Ok(()); }
-    queue!(out, cursor::MoveTo(0, 1))?;
 
-    // tiny LCG for stable stochastic rounding of the fractional dot
-    let mut rng = phase.wrapping_mul(1664525).wrapping_add(1013904223);
+    queue!(out, cursor::MoveTo(0, 1))?;
 
     for row_top in 0..rows {
         let mut line = String::with_capacity(w as usize);
@@ -167,36 +228,24 @@ fn draw_braille(out: &mut Stdout, bars: &[f32], w: u16, h: u16, lay: &Layout, ph
 
         for i in 0..lay.bars.min(bars.len()) {
             let v = bars[i].clamp(0.0, 1.0);
-            let dots_total = v * (rows as f32 * 8.0);
-            let full = (dots_total / 8.0).floor() as i32;
-            let rem_all = (dots_total - full as f32 * 8.0).max(0.0);
+            let dots_total = (v * (rows as f32 * 8.0)).round() as i32;
+            let rem = dots_total - (row_from_bottom as i32) * 8;
 
-            // for this row
-            let rem = (dots_total as i32) - (row_from_bottom as i32) * 8;
-            let ch = if rem >= 8 {
-                '\u{28FF}'
-            } else if rem > 0 {
-                // stochastic rounding on the last dot to remove stepping
-                rng = rng.wrapping_mul(1664525).wrapping_add(1013904223);
-                let frac = rem_all.fract();
-                let add = ((rng >> 8) as f32 / u32::MAX as f32) < frac;
-                let n = rem as u8 + if add { 1 } else { 0 };
-                braille_from_bottom_dots(n.min(8))
-            } else {
-                ' '
-            };
+            let mut rng = phase
+                .wrapping_mul(0x9E3779B1)
+                .wrapping_add((i as u32).wrapping_mul(0x85EBCA6B));
+
+            let ch = braille_from_rem(rem, &mut rng);
             line.push(ch);
             for _ in 0..lay.gap { line.push(' '); }
         }
+
         while line.chars().count() < w as usize { line.push(' '); }
         line.push('\n');
         out.write_all(line.as_bytes())?;
     }
 
-    let mut base = String::with_capacity(w as usize + 1);
-    for _ in 0..w { base.push('─'); }
-    base.push('\n');
-    out.write_all(base.as_bytes())?;
+    // removed baseline line
     out.flush()?;
     Ok(())
 }
@@ -210,17 +259,18 @@ fn main() -> Result<()> {
     const FFT_SIZE: usize = 2048;
 
     // time constants (seconds)
-    const TAU_SPEC: f32 = 0.10;     // spectrum smoothing
-    const TAU_NORM: f32 = 0.45;     // auto gain tracking
-    const FLOOR_FRAC: f32 = 0.05;   // noise floor
+    const TAU_SPEC: f32 = 0.10;
+    const TAU_NORM: f32 = 0.45;
+    const FLOOR_FRAC: f32 = 0.05;
     const LOG_COMP: f32 = 180.0;
 
     // spring smoother per bar
-    const SPR_K: f32 = 60.0;        // stiffness
-    const SPR_ZETA: f32 = 1.0;      // 1.0 gives critical damping
+    const SPR_K: f32 = 60.0;
+    const SPR_ZETA: f32 = 1.0;
 
     const SILENCE_DB: f32 = -60.0;
 
+    // TUI setup
     let mut out = stdout();
     terminal::enable_raw_mode()?;
     execute!(
@@ -273,14 +323,12 @@ fn main() -> Result<()> {
     let mut frame_counter: u32 = 0;
 
     loop {
-        // quit
         if crossterm::event::poll(Duration::from_millis(0))? {
             if let crossterm::event::Event::Key(k) = crossterm::event::read()? {
                 if let crossterm::event::KeyCode::Char('q') = k.code { break; }
             }
         }
 
-        // frame pacing
         let now = Instant::now();
         let dt = now.duration_since(last);
         if dt < target_dt {
@@ -291,7 +339,6 @@ fn main() -> Result<()> {
         last = now;
         frame_counter = frame_counter.wrapping_add(1);
 
-        // layout
         let (w, h) = terminal::size()?;
         let lay = compute_layout(w);
         if filters.len() != lay.bars {
@@ -301,29 +348,25 @@ fn main() -> Result<()> {
             bars_v = vec![0.0; lay.bars];
         }
 
-        // samples
         let samples = { shared.lock().unwrap().latest() };
         if samples.len() < FFT_SIZE { continue; }
         let tail = &samples[samples.len() - FFT_SIZE..];
 
-        // gate
         let rms = tail.iter().map(|x| x * x).sum::<f32>() / FFT_SIZE as f32;
         let db = 10.0 * (rms.max(1e-12)).log10();
         let gate_open = db > SILENCE_DB;
 
-        // FFT
         let mut buf: Vec<Complex<f32>> =
             tail.iter().zip(window.iter()).map(|(x, w)| Complex { re: x * w, im: 0.0 }).collect();
         fft.process(&mut buf);
 
-        // power -> EMA with time constant
         for i in 0..half {
-            let re = buf[i].re; let im = buf[i].im;
+            let re = buf[i].re;
+            let im = buf[i].im;
             let p = (re * re + im * im) / (FFT_SIZE as f32 * FFT_SIZE as f32);
             spec_pow_smooth[i] = ema_tc(spec_pow_smooth[i], p.max(1e-12), TAU_SPEC, dt_s);
         }
 
-        // band energies
         for (i, tri) in filters.iter().enumerate() {
             let mut acc = 0.0f32;
             for &(idx, wgt) in &tri.taps { acc += spec_pow_smooth[idx] * wgt; }
@@ -332,12 +375,12 @@ fn main() -> Result<()> {
             bars_target[i] = if gate_open { v } else { 0.0 };
         }
 
-        // spatial smoothing 9 tap
         if lay.bars >= 9 {
             let k = [1.0f32, 4.0, 11.0, 22.0, 27.0, 22.0, 11.0, 4.0, 1.0];
             let mut sm = vec![0.0f32; lay.bars];
             for i in 0..lay.bars {
-                let mut acc = 0.0; let mut wsum = 0.0;
+                let mut acc = 0.0;
+                let mut wsum = 0.0;
                 for (j, wgt) in k.iter().enumerate() {
                     let idx = (i as isize + j as isize - 4).clamp(0, (lay.bars - 1) as isize) as usize;
                     acc += bars_target[idx] * *wgt;
@@ -348,13 +391,11 @@ fn main() -> Result<()> {
             bars_target.copy_from_slice(&sm);
         }
 
-        // auto gain with floor (time constant)
         let frame_max = bars_target.iter().copied().fold(0.0f32, f32::max);
         norm_max = ema_tc(norm_max, frame_max.max(1e-6), TAU_NORM, dt_s);
         let floor = norm_max * FLOOR_FRAC;
         let scale = (norm_max - floor).max(1e-6);
 
-        // spring smoothing per bar: y'' = k(x - y) - c y'
         let c = 2.0 * (SPR_K).sqrt() * SPR_ZETA;
         for i in 0..lay.bars {
             let x = ((bars_target[i] - floor) / scale).clamp(0.0, 1.0);
@@ -363,7 +404,6 @@ fn main() -> Result<()> {
             bars_y[i] = (bars_y[i] + bars_v[i] * dt_s).clamp(0.0, 1.0);
         }
 
-        // draw
         queue!(out, terminal::Clear(ClearType::All), cursor::MoveTo(0, 0), SetForegroundColor(Color::White))?;
         let header = format!("  mycava  |  input: {}  |  q quits\n", name);
         out.write_all(header.as_bytes())?;
