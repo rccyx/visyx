@@ -32,8 +32,17 @@ impl SpectrumAnalyzer {
         }
     }
 
-    pub fn update_spectrum(&mut self, spec_pow: &[f32], tau_spec: f32, dt_s: f32) {
-        for (i, &pow) in spec_pow.iter().enumerate().take(self.spec_pow_smooth.len().min(spec_pow.len())) {
+    pub fn update_spectrum(
+        &mut self,
+        spec_pow: &[f32],
+        tau_spec: f32,
+        dt_s: f32,
+    ) {
+        for (i, &pow) in spec_pow
+            .iter()
+            .enumerate()
+            .take(self.spec_pow_smooth.len().min(spec_pow.len()))
+        {
             self.spec_pow_smooth[i] = ema_tc(
                 self.spec_pow_smooth[i],
                 pow.max(1e-12),
@@ -43,9 +52,14 @@ impl SpectrumAnalyzer {
         }
     }
 
-    pub fn analyze_bands(&mut self, tilt_alpha: f32, dt_s: f32, gate_open: bool) -> Vec<f32> {
+    pub fn analyze_bands(
+        &mut self,
+        tilt_alpha: f32,
+        dt_s: f32,
+        gate_open: bool,
+    ) -> Vec<f32> {
         let mut db_per_band = vec![0.0f32; self.filters.len()];
-        
+
         for (i, tri) in self.filters.iter().enumerate() {
             let mut acc = 0.0f32;
             for &(idx, wgt) in &tri.taps {
@@ -55,17 +69,20 @@ impl SpectrumAnalyzer {
             }
             let amp = acc.sqrt();
 
-            let tilt = (tri.center_hz / 1000.0).max(0.001).powf(tilt_alpha);
+            let tilt =
+                (tri.center_hz / 1000.0).max(0.001).powf(tilt_alpha);
             let amp_tilted = amp * tilt;
 
-            self.eq_ref[i] = ema_tc(self.eq_ref[i], amp_tilted, 6.0, dt_s).max(1e-9);
+            self.eq_ref[i] =
+                ema_tc(self.eq_ref[i], amp_tilted, 6.0, dt_s)
+                    .max(1e-9);
             let rel = amp_tilted / self.eq_ref[i];
 
             db_per_band[i] = 20.0 * rel.max(1e-12).log10(); // relative dB
         }
 
         self.update_db_range(&db_per_band, dt_s);
-        
+
         let low = self.db_low - 3.0;
         let high = self.db_high + 6.0;
         let range = (high - low).max(12.0);
@@ -81,22 +98,27 @@ impl SpectrumAnalyzer {
             v = 1.0 - (1.0 - v).powf(1.6);
             bars_target[i] = v;
         }
-        
+
         bars_target
     }
-    
-    pub fn update_db_range(&mut self, db_per_band: &[f32], dt_s: f32) {
+
+    pub fn update_db_range(
+        &mut self,
+        db_per_band: &[f32],
+        dt_s: f32,
+    ) {
         let mut sorted = db_per_band.to_vec();
         sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        
+
         let p = |q: f32| -> f32 {
             if sorted.is_empty() {
                 return -60.0;
             }
-            let idx = ((sorted.len() - 1) as f32 * q).round() as usize;
+            let idx =
+                ((sorted.len() - 1) as f32 * q).round() as usize;
             sorted[idx]
         };
-        
+
         let q10 = p(0.10);
         let q90 = p(0.90);
 
@@ -104,14 +126,29 @@ impl SpectrumAnalyzer {
         self.db_low = ema_tc(self.db_low, q10, 0.30, dt_s);
         self.db_high = ema_tc(self.db_high, q90, 0.50, dt_s);
     }
-    
-    pub fn apply_flow_and_spring(&mut self, bars_target: &[f32], flow_k: f32, spr_k: f32, spr_zeta: f32, dt_s: f32) {
+
+    pub fn apply_flow_and_spring(
+        &mut self,
+        bars_target: &[f32],
+        flow_k: f32,
+        spr_k: f32,
+        spr_zeta: f32,
+        dt_s: f32,
+    ) {
         let n = bars_target.len();
         let mut flowed = vec![0.0f32; n];
-        
+
         for i in 0..n {
-            let left = if i > 0 { self.bars_y[i - 1] } else { self.bars_y[i] };
-            let right = if i + 1 < n { self.bars_y[i + 1] } else { self.bars_y[i] };
+            let left = if i > 0 {
+                self.bars_y[i - 1]
+            } else {
+                self.bars_y[i]
+            };
+            let right = if i + 1 < n {
+                self.bars_y[i + 1]
+            } else {
+                self.bars_y[i]
+            };
             let flow = flow_k * (left + right - 2.0 * self.bars_y[i]);
             flowed[i] = (bars_target[i] + flow).clamp(0.0, 1.0);
         }
@@ -121,7 +158,8 @@ impl SpectrumAnalyzer {
         for (i, &x) in flowed.iter().enumerate() {
             let a = spr_k * (x - self.bars_y[i]) - c * self.bars_v[i];
             self.bars_v[i] += a * dt_s;
-            self.bars_y[i] = (self.bars_y[i] + self.bars_v[i] * dt_s).clamp(0.0, 1.0);
+            self.bars_y[i] = (self.bars_y[i] + self.bars_v[i] * dt_s)
+                .clamp(0.0, 1.0);
         }
     }
 }

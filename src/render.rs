@@ -1,6 +1,6 @@
-use std::io::{Stdout, Write};
 use crossterm::{cursor, queue};
 use std::cmp::Ordering;
+use std::io::{Stdout, Write};
 
 const BLOCKS: [char; 9] =
     [' ', '▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
@@ -70,17 +70,18 @@ pub fn draw_blocks_vertical(
             let cells = v * rows as f32;
             let full = cells.floor() as usize;
             let frac = (cells - full as f32).clamp(0.0, 0.999_9);
-            
+
             let ch = match row_from_bottom.cmp(&full) {
                 Ordering::Less => '█',
                 Ordering::Equal => {
-                    let threshold = BAYER8[row_top & 7][i & 7] as f32 / 64.0;
+                    let threshold =
+                        BAYER8[row_top & 7][i & 7] as f32 / 64.0;
                     let mut level = (frac * 8.0).floor();
                     if frac.fract() > threshold {
                         level += 1.0;
                     }
                     BLOCKS[level.clamp(0.0, 8.0) as usize]
-                },
+                }
                 Ordering::Greater => ' ',
             };
             line.push(ch);
