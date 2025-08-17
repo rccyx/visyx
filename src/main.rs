@@ -44,13 +44,13 @@ impl SharedBuf {
 /* ======================= Audio device helpers ====================== */
 fn pick_input_device() -> Result<Device> {
     let host = cpal::default_host();
-    if let Ok(want) = env::var("MYCAVA_DEVICE") {
+    if let Ok(want) = env::var("LOOKAS_DEVICE") {
         for dev in host.input_devices()? {
             if dev.name()?.to_lowercase().contains(&want.to_lowercase()) {
                 return Ok(dev);
             }
         }
-        anyhow::bail!("MYCAVA_DEVICE='{}' not found", want);
+        anyhow::bail!("LOOKAS_DEVICE='{}' not found", want);
     }
     for dev in host.input_devices()? {
         let name = dev.name().unwrap_or_else(|_| String::new()).to_lowercase();
@@ -405,7 +405,7 @@ fn main() -> Result<()> {
         }
 
         queue!(out, terminal::Clear(ClearType::All), cursor::MoveTo(0, 0), SetForegroundColor(Color::White))?;
-        let header = format!("  mycava  |  input: {}  |  q quits\n", name);
+        let header = format!("  lookas  |  input: {}  |  q quits\n", name);
         out.write_all(header.as_bytes())?;
         draw_braille(&mut out, &bars_y, w, h, &lay, frame_counter)?;
     }
