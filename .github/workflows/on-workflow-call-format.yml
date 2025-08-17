@@ -1,0 +1,9 @@
+name: CI
+
+on:
+  workflow_call:
+
+jobs:
+  format:
+    runs-on: ubuntu-latest
+    steps:
