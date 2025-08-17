@@ -1,5 +1,5 @@
-use std::io::{Stdout, Write};
 use crossterm::{cursor, queue};
+use std::io::{Stdout, Write};
 
 const BLOCKS: [char; 9] =
     [' ', '▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
@@ -151,4 +151,4 @@ pub fn draw_blocks_horizontal(
     }
     out.flush()?;
     Ok(())
-} 
+}

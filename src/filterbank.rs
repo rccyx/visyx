@@ -78,4 +78,4 @@ pub fn build_filterbank(
         filters.push(Tri { taps, center_hz });
     }
     filters
-} 
+}

@@ -26,10 +26,13 @@ pub fn mel_to_hz(m: f32) -> f32 {
     700.0 * (10f32.powf(m / 2595.0) - 1.0)
 }
 
-pub fn prepare_fft_input(samples: &[f32], window: &[f32]) -> Vec<Complex<f32>> {
+pub fn prepare_fft_input(
+    samples: &[f32],
+    window: &[f32],
+) -> Vec<Complex<f32>> {
     samples
         .iter()
         .zip(window.iter())
         .map(|(x, w)| Complex { re: x * w, im: 0.0 })
         .collect()
-} 
+}

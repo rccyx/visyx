@@ -12,7 +12,7 @@ impl SharedBuf {
             filled: false,
         }
     }
-    
+
     pub fn push(&mut self, x: f32) {
         self.data[self.write_idx] = x;
         self.write_idx = (self.write_idx + 1) % self.data.len();
@@ -20,7 +20,7 @@ impl SharedBuf {
             self.filled = true;
         }
     }
-    
+
     pub fn latest(&self) -> Vec<f32> {
         if !self.filled {
             return self.data[..self.write_idx].to_vec();
@@ -30,4 +30,4 @@ impl SharedBuf {
         v.extend_from_slice(&self.data[..self.write_idx]);
         v
     }
-} 
+}

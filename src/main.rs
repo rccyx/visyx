@@ -1,6 +1,6 @@
 use anyhow::Result;
-use cpal::SampleFormat;
 use cpal::traits::{DeviceTrait, StreamTrait};
+use cpal::SampleFormat;
 use crossterm::{
     cursor, execute, queue,
     style::{Color, SetForegroundColor},
@@ -12,7 +12,10 @@ use lookas::{
     buffer::SharedBuf,
     dsp::{hann, prepare_fft_input},
     filterbank::build_filterbank,
-    render::{draw_blocks_horizontal, draw_blocks_vertical, layout_for, Orient},
+    render::{
+        draw_blocks_horizontal, draw_blocks_vertical, layout_for,
+        Orient,
+    },
     utils::scopeguard,
 };
 use rustfft::FftPlanner;
@@ -64,7 +67,8 @@ fn main() -> Result<()> {
 
     let ring_len = (sr as usize / 10).max(FFT_SIZE * 3);
     let shared = Arc::new(Mutex::new(SharedBuf::new(ring_len)));
-    let stream = match device.default_input_config()?.sample_format() {
+    let stream = match device.default_input_config()?.sample_format()
+    {
         SampleFormat::F32 => {
             build_stream::<f32>(device, cfg.clone(), shared.clone())?
         }
@@ -141,7 +145,8 @@ fn main() -> Result<()> {
         let tail = &samples[samples.len() - FFT_SIZE..];
 
         // gate on room noise
-        let rms = tail.iter().map(|x| x * x).sum::<f32>() / FFT_SIZE as f32;
+        let rms =
+            tail.iter().map(|x| x * x).sum::<f32>() / FFT_SIZE as f32;
         let rms_db = 10.0 * (rms.max(1e-12)).log10();
         let gate_open = rms_db > GATE_DB;
 
@@ -153,12 +158,20 @@ fn main() -> Result<()> {
         for i in 0..half {
             let re = buf[i].re;
             let im = buf[i].im;
-            spec_pow[i] = (re * re + im * im) / (FFT_SIZE as f32 * FFT_SIZE as f32);
+            spec_pow[i] = (re * re + im * im)
+                / (FFT_SIZE as f32 * FFT_SIZE as f32);
         }
 
         analyzer.update_spectrum(&spec_pow, TAU_SPEC, dt_s);
-        let bars_target = analyzer.analyze_bands(TILT_ALPHA, dt_s, gate_open);
-        analyzer.apply_flow_and_spring(&bars_target, FLOW_K, SPR_K, SPR_ZETA, dt_s);
+        let bars_target =
+            analyzer.analyze_bands(TILT_ALPHA, dt_s, gate_open);
+        analyzer.apply_flow_and_spring(
+            &bars_target,
+            FLOW_K,
+            SPR_K,
+            SPR_ZETA,
+            dt_s,
+        );
 
         queue!(
             out,
@@ -175,12 +188,20 @@ fn main() -> Result<()> {
         out.write_all(header.as_bytes())?;
 
         match orient {
-            Orient::Vertical => {
-                draw_blocks_vertical(&mut out, &analyzer.bars_y, w, h, &lay)?
-            }
-            Orient::Horizontal => {
-                draw_blocks_horizontal(&mut out, &analyzer.bars_y, w, h, &lay)?
-            }
+            Orient::Vertical => draw_blocks_vertical(
+                &mut out,
+                &analyzer.bars_y,
+                w,
+                h,
+                &lay,
+            )?,
+            Orient::Horizontal => draw_blocks_horizontal(
+                &mut out,
+                &analyzer.bars_y,
+                w,
+                h,
+                &lay,
+            )?,
         }
     }
 }
