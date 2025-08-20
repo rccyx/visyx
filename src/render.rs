@@ -2,19 +2,12 @@ use crossterm::{cursor, queue};
 use std::cmp::Ordering;
 use std::io::{Stdout, Write};
 
-const BLOCKS: [char; 9] =
+/// vertical partials (height)
+const VBLOCKS: [char; 9] =
     [' ', '▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
-
-const BAYER8: [[u8; 8]; 8] = [
-    [0, 48, 12, 60, 3, 51, 15, 63],
-    [32, 16, 44, 28, 35, 19, 47, 31],
-    [8, 56, 4, 52, 11, 59, 7, 55],
-    [40, 24, 36, 20, 43, 27, 39, 23],
-    [2, 50, 14, 62, 1, 49, 13, 61],
-    [34, 18, 46, 30, 33, 17, 45, 29],
-    [10, 58, 6, 54, 9, 57, 5, 53],
-    [42, 26, 38, 22, 41, 25, 37, 21],
-];
+/// horizontal partials (width)
+const HBLOCKS: [char; 9] =
+    [' ', '▏', '▎', '▍', '▌', '▋', '▊', '▉', '█'];
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum Orient {
@@ -30,33 +23,34 @@ pub struct Layout {
 
 #[inline]
 pub fn layout_for(w: u16, _h: u16, orient: Orient) -> Layout {
+    // For both orientations, tie bar count to available columns to maximize “object” count.
+    // Horizontal will aggregate many bars into each row during draw to avoid aliasing.
+    let left_pad = 1u16;
+    let right_pad = 2u16;
+    let usable = w.saturating_sub(left_pad + right_pad);
     match orient {
-        Orient::Vertical => {
-            let left_pad = 1u16;
-            let right_pad = 2u16;
-            let usable = w.saturating_sub(left_pad + right_pad);
-            Layout {
-                bars: usable.max(10) as usize,
-                left_pad,
-                right_pad,
-            }
-        }
-        Orient::Horizontal => Layout {
-            bars: 0,
-            left_pad: 1,
-            right_pad: 2,
+        Orient::Vertical | Orient::Horizontal => Layout {
+            bars: usable.max(10) as usize,
+            left_pad,
+            right_pad,
         },
     }
 }
 
-/// Map fractional fill into a smoother block level using dithering
-fn partial_block(frac: f32, row: usize, col: usize) -> char {
-    let mut level = (frac * 8.0).floor();
-    let threshold = BAYER8[row & 7][col & 7] as f32 / 64.0;
-    if frac.fract() > threshold {
-        level += 1.0;
-    }
-    BLOCKS[level.clamp(0.0, 8.0) as usize]
+#[inline]
+fn level_from_frac(frac: f32, gamma: f32) -> usize {
+    let f = frac.clamp(0.0, 0.9999).powf(gamma);
+    ((f * 8.0) + 0.5).floor().clamp(0.0, 8.0) as usize
+}
+
+#[inline]
+fn v_partial(frac: f32) -> char {
+    VBLOCKS[level_from_frac(frac, 0.70)]
+}
+
+#[inline]
+fn h_partial(frac: f32) -> char {
+    HBLOCKS[level_from_frac(frac, 0.70)]
 }
 
 pub fn draw_blocks_vertical(
@@ -83,18 +77,18 @@ pub fn draw_blocks_vertical(
             std::iter::repeat(' ').take(lay.left_pad as usize),
         );
 
-        // draw bars
-        for (i, &v) in bars.iter().enumerate() {
-            let v = v.clamp(0.0, 1.0);
+        // draw columns
+        for (i, &v_in) in bars.iter().enumerate() {
+            let v = v_in.clamp(0.0, 1.0);
             let cells = v * rows as f32;
             let full = cells.floor() as usize;
 
             let ch = match row_from_bottom.cmp(&full) {
                 Ordering::Less => '█',
                 Ordering::Equal => {
-                    let frac = cells - full as f32;
+                    let frac = (cells - full as f32).max(0.0);
                     if frac > 0.0 {
-                        partial_block(frac, row_top, i)
+                        v_partial(frac)
                     } else {
                         ' '
                     }
@@ -135,6 +129,7 @@ pub fn draw_blocks_horizontal(
 
     let mut line = String::with_capacity(w as usize + 1);
     let bars_len = bars.len();
+    let per_row = (bars_len.max(1) + rows - 1) / rows; // ceil
 
     for row in 0..rows {
         line.clear();
@@ -144,27 +139,41 @@ pub fn draw_blocks_horizontal(
             std::iter::repeat(' ').take(lay.left_pad as usize),
         );
 
-        if row < bars_len {
-            let v = bars[row].clamp(0.0, 1.0);
+        let start = row * per_row;
+        if start < bars_len {
+            let end = (start + per_row).min(bars_len);
+
+            // pool a chunk of bars into this row to avoid aliasing
+            let mut acc = 0.0f32;
+            for i in start..end {
+                acc += bars[i].clamp(0.0, 1.0);
+            }
+            let v = (acc / (end - start) as f32).clamp(0.0, 1.0);
+
             let cells = v * usable_w as f32;
             let full = cells.floor() as usize;
 
             // full blocks
-            line.extend(std::iter::repeat('█').take(full));
+            line.extend(
+                std::iter::repeat('█').take(full.min(usable_w)),
+            );
 
-            // partial block
+            // partial block using width-partials
             if full < usable_w {
-                let frac = cells - full as f32;
-                if frac > 0.0 {
-                    line.push(partial_block(frac, row, full));
+                let frac = (cells - full as f32).max(0.0);
+                line.push(if frac > 0.0 {
+                    h_partial(frac)
                 } else {
-                    line.push(' ');
-                }
+                    ' '
+                });
 
                 // fill remainder
-                line.extend(
-                    std::iter::repeat(' ').take(usable_w - full - 1),
-                );
+                if usable_w > full + 1 {
+                    line.extend(
+                        std::iter::repeat(' ')
+                            .take(usable_w - full - 1),
+                    );
+                }
             }
         } else {
             // empty row

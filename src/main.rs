@@ -137,10 +137,8 @@ fn main() -> Result<()> {
         // Layout calculation
         let (w, h) = terminal::size()?;
         let lay = layout_for(w, h, orient);
-        let desired_bars = match orient {
-            Orient::Vertical => lay.bars,
-            Orient::Horizontal => h.saturating_sub(3) as usize,
-        };
+        // Always tie analyzer resolution to columns via layout_for.
+        let desired_bars = lay.bars;
 
         // Update filters if needed
         if analyzer.filters.len() != desired_bars {
@@ -238,6 +236,7 @@ fn main() -> Result<()> {
                 h,
                 &lay,
             )?,
+            // In horizontal, renderer aggregates many bars into each row, so we still pass all bars.
             Orient::Horizontal => draw_blocks_horizontal(
                 &mut out,
                 &analyzer.bars_y,
