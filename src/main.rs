@@ -13,7 +13,7 @@ use lookas::{
     dsp::{hann, prepare_fft_input},
     filterbank::build_filterbank,
     render::{
-        draw_blocks_horizontal, draw_blocks_vertical, layout_for, HorzMode, Orient,
+        draw_blocks_horizontal, draw_blocks_vertical, layout_for, HorzMode, Orient, VertMode,
     },
     utils::scopeguard,
 };
@@ -45,6 +45,17 @@ fn horz_mode_from_env() -> HorzMode {
     }
 }
 
+fn vert_mode_from_env() -> VertMode {
+    match env::var("LOOKAS_VERT_MODE")
+        .unwrap_or_else(|_| "braille".into())
+        .to_lowercase()
+        .as_str()
+    {
+        "blocks" | "b" => VertMode::Blocks,
+        _ => VertMode::Braille, // default
+    }
+}
+
 fn main() -> Result<()> {
     let fmin: f32 = get_env("LOOKAS_FMIN", 30.0);
     let fmax: f32 = get_env("LOOKAS_FMAX", 16_000.0);
@@ -73,7 +84,7 @@ fn main() -> Result<()> {
         let _ = terminal::disable_raw_mode();
     });
 
-    // Audio setup
+    // Audio
     let device = pick_input_device()?;
     let name = device.name().unwrap_or_else(|_| "<unknown>".into());
     let cfg = best_config_for(&device)?;
@@ -90,7 +101,7 @@ fn main() -> Result<()> {
     };
     stream.play()?;
 
-    // FFT setup
+    // FFT
     let window = hann(fft_size);
     let mut planner = FftPlanner::<f32>::new();
     let fft = planner.plan_fft_forward(fft_size);
@@ -102,6 +113,7 @@ fn main() -> Result<()> {
     let mut analyzer = SpectrumAnalyzer::new(half);
     let mut orient = Orient::Vertical;
     let mut horz_mode = horz_mode_from_env();
+    let mut vert_mode = vert_mode_from_env();
 
     // Buffers
     let mut buf = Vec::with_capacity(fft_size);
@@ -123,12 +135,18 @@ fn main() -> Result<()> {
                             HorzMode::Columns => HorzMode::Rows,
                         }
                     }
+                    Char('b') => {
+                        vert_mode = match vert_mode {
+                            VertMode::Blocks => VertMode::Braille,
+                            VertMode::Braille => VertMode::Blocks,
+                        }
+                    }
                     _ => {}
                 }
             }
         }
 
-        // frame pacing
+        // pacing
         let now = Instant::now();
         let dt = now.duration_since(last);
         if dt < target_dt {
@@ -140,7 +158,7 @@ fn main() -> Result<()> {
 
         // layout
         let (w, h) = terminal::size()?;
-        let lay = layout_for(w, h, orient, horz_mode);
+        let lay = layout_for(w, h, orient, horz_mode, vert_mode);
         let desired_bars = lay.bars;
 
         // filters
@@ -199,10 +217,16 @@ fn main() -> Result<()> {
             Orient::Horizontal => "horizontal",
         });
         if let Orient::Horizontal = orient {
-            header.push_str("  |  mode: ");
+            header.push_str("  |  hmode: ");
             header.push_str(match horz_mode {
                 HorzMode::Rows => "rows",
                 HorzMode::Columns => "columns",
+            });
+        } else {
+            header.push_str("  |  vmode: ");
+            header.push_str(match vert_mode {
+                VertMode::Blocks => "blocks",
+                VertMode::Braille => "braille",
             });
         }
         header.push_str("  |  auto gain [");
@@ -213,7 +237,7 @@ fn main() -> Result<()> {
             analyzer.db_low - 3.0,
             analyzer.db_high + 6.0
         );
-        header.push_str("]  |  v/h switch, m mode, q quits\n");
+        header.push_str("]  |  v/h switch, m h-mode, b v-mode, q quits\n");
         out.write_all(header.as_bytes())?;
 
         match orient {
