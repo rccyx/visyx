@@ -4,6 +4,7 @@ use std::io::{Stdout, Write};
 
 const BLOCKS: [char; 9] =
     [' ', '▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+
 const BAYER8: [[u8; 8]; 8] = [
     [0, 48, 12, 60, 3, 51, 15, 63],
     [32, 16, 44, 28, 35, 19, 47, 31],
@@ -48,6 +49,16 @@ pub fn layout_for(w: u16, _h: u16, orient: Orient) -> Layout {
     }
 }
 
+/// Map fractional fill into a smoother block level using dithering
+fn partial_block(frac: f32, row: usize, col: usize) -> char {
+    let mut level = (frac * 8.0).floor();
+    let threshold = BAYER8[row & 7][col & 7] as f32 / 64.0;
+    if frac.fract() > threshold {
+        level += 1.0;
+    }
+    BLOCKS[level.clamp(0.0, 8.0) as usize]
+}
+
 pub fn draw_blocks_vertical(
     out: &mut Stdout,
     bars: &[f32],
@@ -67,12 +78,12 @@ pub fn draw_blocks_vertical(
         line.clear();
         let row_from_bottom = rows - 1 - row_top;
 
-        // Add left padding
-        for _ in 0..lay.left_pad {
-            line.push(' ');
-        }
+        // left padding
+        line.extend(
+            std::iter::repeat(' ').take(lay.left_pad as usize),
+        );
 
-        // Draw bars
+        // draw bars
         for (i, &v) in bars.iter().enumerate() {
             let v = v.clamp(0.0, 1.0);
             let cells = v * rows as f32;
@@ -81,25 +92,23 @@ pub fn draw_blocks_vertical(
             let ch = match row_from_bottom.cmp(&full) {
                 Ordering::Less => '█',
                 Ordering::Equal => {
-                    let frac =
-                        (cells - full as f32).clamp(0.0, 0.999_9);
-                    let threshold =
-                        BAYER8[row_top & 7][i & 7] as f32 / 64.0;
-                    let mut level = (frac * 8.0).floor();
-                    if frac.fract() > threshold {
-                        level += 1.0;
+                    let frac = cells - full as f32;
+                    if frac > 0.0 {
+                        partial_block(frac, row_top, i)
+                    } else {
+                        ' '
                     }
-                    BLOCKS[level.clamp(0.0, 8.0) as usize]
                 }
                 Ordering::Greater => ' ',
             };
             line.push(ch);
         }
 
-        // Add right padding
-        for _ in 0..lay.right_pad {
-            line.push(' ');
-        }
+        // right padding
+        line.extend(
+            std::iter::repeat(' ').take(lay.right_pad as usize),
+        );
+
         line.push('\n');
         out.write_all(line.as_bytes())?;
     }
@@ -130,48 +139,42 @@ pub fn draw_blocks_horizontal(
     for row in 0..rows {
         line.clear();
 
-        // Add left padding
-        for _ in 0..lay.left_pad {
-            line.push(' ');
-        }
+        // left padding
+        line.extend(
+            std::iter::repeat(' ').take(lay.left_pad as usize),
+        );
 
         if row < bars_len {
             let v = bars[row].clamp(0.0, 1.0);
             let cells = v * usable_w as f32;
             let full = cells.floor() as usize;
 
-            // Draw full blocks
-            for _ in 0..full {
-                line.push('█');
-            }
+            // full blocks
+            line.extend(std::iter::repeat('█').take(full));
 
-            // Draw partial block if needed
+            // partial block
             if full < usable_w {
-                let frac = (cells - full as f32).clamp(0.0, 0.999_9);
-                let threshold =
-                    BAYER8[row & 7][full & 7] as f32 / 64.0;
-                let mut level = (frac * 8.0).floor();
-                if frac.fract() > threshold {
-                    level += 1.0;
-                }
-                line.push(BLOCKS[level.clamp(0.0, 8.0) as usize]);
-
-                // Fill remaining space with spaces
-                for _ in full + 1..usable_w {
+                let frac = cells - full as f32;
+                if frac > 0.0 {
+                    line.push(partial_block(frac, row, full));
+                } else {
                     line.push(' ');
                 }
+
+                // fill remainder
+                line.extend(
+                    std::iter::repeat(' ').take(usable_w - full - 1),
+                );
             }
         } else {
-            // Fill empty rows with spaces
-            for _ in 0..usable_w {
-                line.push(' ');
-            }
+            // empty row
+            line.extend(std::iter::repeat(' ').take(usable_w));
         }
 
-        // Add right padding
-        for _ in 0..lay.right_pad {
-            line.push(' ');
-        }
+        // right padding
+        line.extend(
+            std::iter::repeat(' ').take(lay.right_pad as usize),
+        );
 
         line.push('\n');
         out.write_all(line.as_bytes())?;
