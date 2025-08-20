@@ -13,8 +13,7 @@ use lookas::{
     dsp::{hann, prepare_fft_input},
     filterbank::build_filterbank,
     render::{
-        draw_blocks_horizontal, draw_blocks_vertical, layout_for,
-        Orient,
+        draw_blocks_horizontal, draw_blocks_vertical, layout_for, HorzMode, Orient,
     },
     utils::scopeguard,
 };
@@ -32,6 +31,17 @@ fn get_env<T: std::str::FromStr>(name: &str, default: T) -> T {
     match env::var(name) {
         Ok(val) => val.parse::<T>().unwrap_or(default),
         Err(_) => default,
+    }
+}
+
+fn horz_mode_from_env() -> HorzMode {
+    match env::var("LOOKAS_HORZ_MODE")
+        .unwrap_or_else(|_| "rows".into())
+        .to_lowercase()
+        .as_str()
+    {
+        "columns" | "cols" | "c" => HorzMode::Columns,
+        _ => HorzMode::Rows,
     }
 }
 
@@ -59,11 +69,7 @@ fn main() -> Result<()> {
 
     let _cleanup = scopeguard::guard((), |_| {
         let mut out = stdout();
-        let _ = execute!(
-            out,
-            cursor::Show,
-            terminal::LeaveAlternateScreen
-        );
+        let _ = execute!(out, cursor::Show, terminal::LeaveAlternateScreen);
         let _ = terminal::disable_raw_mode();
     });
 
@@ -76,17 +82,10 @@ fn main() -> Result<()> {
     let ring_len = (sr as usize / 10).max(fft_size * 3);
     let shared = Arc::new(Mutex::new(SharedBuf::new(ring_len)));
 
-    let stream = match device.default_input_config()?.sample_format()
-    {
-        SampleFormat::F32 => {
-            build_stream::<f32>(device, cfg.clone(), shared.clone())?
-        }
-        SampleFormat::I16 => {
-            build_stream::<i16>(device, cfg.clone(), shared.clone())?
-        }
-        SampleFormat::U16 => {
-            build_stream::<u16>(device, cfg.clone(), shared.clone())?
-        }
+    let stream = match device.default_input_config()?.sample_format() {
+        SampleFormat::F32 => build_stream::<f32>(device, cfg.clone(), shared.clone())?,
+        SampleFormat::I16 => build_stream::<i16>(device, cfg.clone(), shared.clone())?,
+        SampleFormat::U16 => build_stream::<u16>(device, cfg.clone(), shared.clone())?,
         _ => anyhow::bail!("Unsupported sample format"),
     };
     stream.play()?;
@@ -97,34 +96,39 @@ fn main() -> Result<()> {
     let fft = planner.plan_fft_forward(fft_size);
     let half = fft_size / 2;
 
-    // State initialization
+    // State
     let mut last = Instant::now();
     let target_dt = Duration::from_millis(target_fps_ms);
     let mut analyzer = SpectrumAnalyzer::new(half);
     let mut orient = Orient::Vertical;
+    let mut horz_mode = horz_mode_from_env();
 
-    // Pre-allocate buffers
+    // Buffers
     let mut buf = Vec::with_capacity(fft_size);
     let mut spec_pow = vec![0.0; half];
-    let mut header = String::with_capacity(200);
+    let mut header = String::with_capacity(256);
 
     loop {
-        // Handle user input
+        // keys
         if crossterm::event::poll(Duration::from_millis(0))? {
-            if let crossterm::event::Event::Key(k) =
-                crossterm::event::read()?
-            {
+            if let crossterm::event::Event::Key(k) = crossterm::event::read()? {
                 use crossterm::event::KeyCode::*;
                 match k.code {
                     Char('q') => return Ok(()),
                     Char('v') => orient = Orient::Vertical,
                     Char('h') => orient = Orient::Horizontal,
+                    Char('m') => {
+                        horz_mode = match horz_mode {
+                            HorzMode::Rows => HorzMode::Columns,
+                            HorzMode::Columns => HorzMode::Rows,
+                        }
+                    }
                     _ => {}
                 }
             }
         }
 
-        // Frame timing
+        // frame pacing
         let now = Instant::now();
         let dt = now.duration_since(last);
         if dt < target_dt {
@@ -134,38 +138,25 @@ fn main() -> Result<()> {
         let dt_s = dt.as_secs_f32();
         last = now;
 
-        // Layout calculation
+        // layout
         let (w, h) = terminal::size()?;
-        let lay = layout_for(w, h, orient);
-        // Always tie analyzer resolution to columns via layout_for.
+        let lay = layout_for(w, h, orient, horz_mode);
         let desired_bars = lay.bars;
 
-        // Update filters if needed
+        // filters
         if analyzer.filters.len() != desired_bars {
-            analyzer.filters = build_filterbank(
-                sr,
-                fft_size,
-                desired_bars,
-                fmin,
-                fmax,
-            );
+            analyzer.filters = build_filterbank(sr, fft_size, desired_bars, fmin, fmax);
             analyzer.resize(desired_bars);
         }
 
-        // Get audio samples
-        let samples = if let Ok(buf) = shared.try_lock() {
-            buf.latest()
-        } else {
-            continue;
-        };
-
+        // samples
+        let samples = if let Ok(buf) = shared.try_lock() { buf.latest() } else { continue };
         if samples.len() < fft_size {
             continue;
         }
-
         let tail = &samples[samples.len() - fft_size..];
 
-        // Calculate RMS and apply gate
+        // gate
         let mut rms = 0.0;
         for &x in tail {
             rms += x * x;
@@ -174,32 +165,24 @@ fn main() -> Result<()> {
         let rms_db = 10.0 * (rms.max(1e-12)).log10();
         let gate_open = rms_db > gate_db;
 
-        // FFT processing
+        // FFT
         buf.clear();
         buf = prepare_fft_input(tail, &window);
         fft.process(&mut buf);
 
-        // Calculate power spectrum
+        // power spectrum
         for i in 0..half {
             let re = buf[i].re;
             let im = buf[i].im;
-            spec_pow[i] = (re * re + im * im)
-                / (fft_size as f32 * fft_size as f32);
+            spec_pow[i] = (re * re + im * im) / (fft_size as f32 * fft_size as f32);
         }
 
-        // Analyze spectrum
+        // analysis
         analyzer.update_spectrum(&spec_pow, tau_spec, dt_s);
-        let bars_target =
-            analyzer.analyze_bands(tilt_alpha, dt_s, gate_open);
-        analyzer.apply_flow_and_spring(
-            &bars_target,
-            flow_k,
-            spr_k,
-            spr_zeta,
-            dt_s,
-        );
+        let bars_target = analyzer.analyze_bands(tilt_alpha, dt_s, gate_open);
+        analyzer.apply_flow_and_spring(&bars_target, flow_k, spr_k, spr_zeta, dt_s);
 
-        // Render UI
+        // draw
         queue!(
             out,
             terminal::Clear(ClearType::All),
@@ -215,35 +198,32 @@ fn main() -> Result<()> {
             Orient::Vertical => "vertical",
             Orient::Horizontal => "horizontal",
         });
-        header.push_str("  |  auto gain window [");
-
+        if let Orient::Horizontal = orient {
+            header.push_str("  |  mode: ");
+            header.push_str(match horz_mode {
+                HorzMode::Rows => "rows",
+                HorzMode::Columns => "columns",
+            });
+        }
+        header.push_str("  |  auto gain [");
         use std::fmt::Write;
         let _ = write!(
             header,
-            "{:.1} dB .. {:.1} dB",
+            "{:.1}..{:.1} dB",
             analyzer.db_low - 3.0,
             analyzer.db_high + 6.0
         );
-        header.push_str("]  |  v/h to switch, q quits\n");
-
+        header.push_str("]  |  v/h switch, m mode, q quits\n");
         out.write_all(header.as_bytes())?;
 
         match orient {
-            Orient::Vertical => draw_blocks_vertical(
-                &mut out,
-                &analyzer.bars_y,
-                w,
-                h,
-                &lay,
-            )?,
-            // In horizontal, renderer aggregates many bars into each row, so we still pass all bars.
-            Orient::Horizontal => draw_blocks_horizontal(
-                &mut out,
-                &analyzer.bars_y,
-                w,
-                h,
-                &lay,
-            )?,
+            Orient::Vertical => {
+                draw_blocks_vertical(&mut out, &analyzer.bars_y, w, h, &lay)?
+            }
+            Orient::Horizontal => {
+                draw_blocks_horizontal(&mut out, &analyzer.bars_y, w, h, &lay, horz_mode)?
+            }
         }
     }
 }
+
