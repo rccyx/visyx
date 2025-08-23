@@ -2,7 +2,8 @@ use crossterm::{cursor, queue};
 use std::io::{Stdout, Write};
 
 /// width partials for clean bar tips (no dithering)
-const HBLOCKS: [char; 9] = [' ', '▏', '▎', '▍', '▌', '▋', '▊', '▉', '█'];
+const HBLOCKS: [char; 9] =
+    [' ', '▏', '▎', '▍', '▌', '▋', '▊', '▉', '█'];
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum Orient {
@@ -18,14 +19,19 @@ pub enum Mode {
 }
 
 pub struct Layout {
-    pub bars: usize,     // analyzer resolution (bands)
+    pub bars: usize, // analyzer resolution (bands)
     pub left_pad: u16,
     pub right_pad: u16,
     pub mode: Mode,
 }
 
 #[inline]
-pub fn layout_for(w: u16, h: u16, _orient: Orient, mode: Mode) -> Layout {
+pub fn layout_for(
+    w: u16,
+    h: u16,
+    _orient: Orient,
+    mode: Mode,
+) -> Layout {
     let left_pad = 1u16;
     let right_pad = 2u16;
     let usable_cols = w.saturating_sub(left_pad + right_pad);
@@ -64,7 +70,8 @@ pub fn draw_bars(
     lay: &Layout,
 ) -> std::io::Result<()> {
     let rows = h.saturating_sub(3) as usize;
-    let usable_w = w.saturating_sub(lay.left_pad + lay.right_pad) as usize;
+    let usable_w =
+        w.saturating_sub(lay.left_pad + lay.right_pad) as usize;
     if rows == 0 || usable_w == 0 {
         return Ok(());
     }
@@ -79,23 +86,38 @@ pub fn draw_bars(
             // classic: one band per row (fills height)
             for row in 0..rows {
                 line.clear();
-                line.extend(std::iter::repeat(' ').take(lay.left_pad as usize));
+                line.extend(
+                    std::iter::repeat(' ')
+                        .take(lay.left_pad as usize),
+                );
 
                 let v = if row < bars_len { bars[row] } else { 0.0 };
                 let v = v.clamp(0.0, 1.0);
                 let cells = v * usable_w as f32;
                 let full = cells.floor() as usize;
 
-                line.extend(std::iter::repeat('█').take(full.min(usable_w)));
+                line.extend(
+                    std::iter::repeat('█').take(full.min(usable_w)),
+                );
                 if full < usable_w {
                     let frac = (cells - full as f32).max(0.0);
-                    line.push(if frac > 0.0 { h_partial(frac) } else { ' ' });
+                    line.push(if frac > 0.0 {
+                        h_partial(frac)
+                    } else {
+                        ' '
+                    });
                     if usable_w > full + 1 {
-                        line.extend(std::iter::repeat(' ').take(usable_w - full - 1));
+                        line.extend(
+                            std::iter::repeat(' ')
+                                .take(usable_w - full - 1),
+                        );
                     }
                 }
 
-                line.extend(std::iter::repeat(' ').take(lay.right_pad as usize));
+                line.extend(
+                    std::iter::repeat(' ')
+                        .take(lay.right_pad as usize),
+                );
                 line.push('\n');
                 out.write_all(line.as_bytes())?;
             }
@@ -105,7 +127,10 @@ pub fn draw_bars(
             let per_row = (bars_len.max(1) + rows - 1) / rows; // ceil
             for row in 0..rows {
                 line.clear();
-                line.extend(std::iter::repeat(' ').take(lay.left_pad as usize));
+                line.extend(
+                    std::iter::repeat(' ')
+                        .take(lay.left_pad as usize),
+                );
 
                 let start = row * per_row;
                 if start < bars_len {
@@ -114,24 +139,40 @@ pub fn draw_bars(
                     for i in start..end {
                         acc += bars[i].clamp(0.0, 1.0);
                     }
-                    let v = (acc / (end - start) as f32).clamp(0.0, 1.0);
+                    let v =
+                        (acc / (end - start) as f32).clamp(0.0, 1.0);
 
                     let cells = v * usable_w as f32;
                     let full = cells.floor() as usize;
 
-                    line.extend(std::iter::repeat('█').take(full.min(usable_w)));
+                    line.extend(
+                        std::iter::repeat('█')
+                            .take(full.min(usable_w)),
+                    );
                     if full < usable_w {
                         let frac = (cells - full as f32).max(0.0);
-                        line.push(if frac > 0.0 { h_partial(frac) } else { ' ' });
+                        line.push(if frac > 0.0 {
+                            h_partial(frac)
+                        } else {
+                            ' '
+                        });
                         if usable_w > full + 1 {
-                            line.extend(std::iter::repeat(' ').take(usable_w - full - 1));
+                            line.extend(
+                                std::iter::repeat(' ')
+                                    .take(usable_w - full - 1),
+                            );
                         }
                     }
                 } else {
-                    line.extend(std::iter::repeat(' ').take(usable_w));
+                    line.extend(
+                        std::iter::repeat(' ').take(usable_w),
+                    );
                 }
 
-                line.extend(std::iter::repeat(' ').take(lay.right_pad as usize));
+                line.extend(
+                    std::iter::repeat(' ')
+                        .take(lay.right_pad as usize),
+                );
                 line.push('\n');
                 out.write_all(line.as_bytes())?;
             }
@@ -143,6 +184,24 @@ pub fn draw_bars(
 }
 
 // Backwards-compat wrappers so the rest of the code can call either name.
-#[inline] pub fn draw_blocks_horizontal(out: &mut Stdout, bars: &[f32], w: u16, h: u16, lay: &Layout, _mode: Mode) -> std::io::Result<()> { draw_bars(out, bars, w, h, lay) }
-#[inline] pub fn draw_blocks_vertical  (out: &mut Stdout, bars: &[f32], w: u16, h: u16, lay: &Layout) -> std::io::Result<()> { draw_bars(out, bars, w, h, lay) }
-
+#[inline]
+pub fn draw_blocks_horizontal(
+    out: &mut Stdout,
+    bars: &[f32],
+    w: u16,
+    h: u16,
+    lay: &Layout,
+    _mode: Mode,
+) -> std::io::Result<()> {
+    draw_bars(out, bars, w, h, lay)
+}
+#[inline]
+pub fn draw_blocks_vertical(
+    out: &mut Stdout,
+    bars: &[f32],
+    w: u16,
+    h: u16,
+    lay: &Layout,
+) -> std::io::Result<()> {
+    draw_bars(out, bars, w, h, lay)
+}

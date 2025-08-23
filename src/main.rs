@@ -12,7 +12,10 @@ use lookas::{
     buffer::SharedBuf,
     dsp::{hann, prepare_fft_input},
     filterbank::build_filterbank,
-    render::{draw_blocks_horizontal, draw_blocks_vertical, layout_for, Mode, Orient},
+    render::{
+        draw_blocks_horizontal, draw_blocks_vertical, layout_for,
+        Mode, Orient,
+    },
     utils::scopeguard,
 };
 use rustfft::FftPlanner;
@@ -68,7 +71,11 @@ fn main() -> Result<()> {
 
     let _cleanup = scopeguard::guard((), |_| {
         let mut out = stdout();
-        let _ = execute!(out, cursor::Show, terminal::LeaveAlternateScreen);
+        let _ = execute!(
+            out,
+            cursor::Show,
+            terminal::LeaveAlternateScreen
+        );
         let _ = terminal::disable_raw_mode();
     });
 
@@ -81,10 +88,17 @@ fn main() -> Result<()> {
     let ring_len = (sr as usize / 10).max(fft_size * 3);
     let shared = Arc::new(Mutex::new(SharedBuf::new(ring_len)));
 
-    let stream = match device.default_input_config()?.sample_format() {
-        SampleFormat::F32 => build_stream::<f32>(device, cfg.clone(), shared.clone())?,
-        SampleFormat::I16 => build_stream::<i16>(device, cfg.clone(), shared.clone())?,
-        SampleFormat::U16 => build_stream::<u16>(device, cfg.clone(), shared.clone())?,
+    let stream = match device.default_input_config()?.sample_format()
+    {
+        SampleFormat::F32 => {
+            build_stream::<f32>(device, cfg.clone(), shared.clone())?
+        }
+        SampleFormat::I16 => {
+            build_stream::<i16>(device, cfg.clone(), shared.clone())?
+        }
+        SampleFormat::U16 => {
+            build_stream::<u16>(device, cfg.clone(), shared.clone())?
+        }
         _ => anyhow::bail!("Unsupported sample format"),
     };
     stream.play()?;
@@ -100,7 +114,7 @@ fn main() -> Result<()> {
     let target_dt = Duration::from_millis(target_fps_ms);
     let mut analyzer = SpectrumAnalyzer::new(half);
     let mut orient = Orient::Horizontal; // start on the good-looking one
-    let mut mode = mode_from_env();      // rows | columns
+    let mut mode = mode_from_env(); // rows | columns
 
     // Buffers
     let mut buf = Vec::with_capacity(fft_size);
@@ -110,7 +124,9 @@ fn main() -> Result<()> {
     loop {
         // keys
         if crossterm::event::poll(Duration::from_millis(0))? {
-            if let crossterm::event::Event::Key(k) = crossterm::event::read()? {
+            if let crossterm::event::Event::Key(k) =
+                crossterm::event::read()?
+            {
                 use crossterm::event::KeyCode::*;
                 match k.code {
                     Char('q') => return Ok(()),
@@ -144,12 +160,22 @@ fn main() -> Result<()> {
 
         // filters
         if analyzer.filters.len() != desired_bars {
-            analyzer.filters = build_filterbank(sr, fft_size, desired_bars, fmin, fmax);
+            analyzer.filters = build_filterbank(
+                sr,
+                fft_size,
+                desired_bars,
+                fmin,
+                fmax,
+            );
             analyzer.resize(desired_bars);
         }
 
         // samples
-        let samples = if let Ok(buf) = shared.try_lock() { buf.latest() } else { continue };
+        let samples = if let Ok(buf) = shared.try_lock() {
+            buf.latest()
+        } else {
+            continue;
+        };
         if samples.len() < fft_size {
             continue;
         }
@@ -173,13 +199,21 @@ fn main() -> Result<()> {
         for i in 0..half {
             let re = buf[i].re;
             let im = buf[i].im;
-            spec_pow[i] = (re * re + im * im) / (fft_size as f32 * fft_size as f32);
+            spec_pow[i] = (re * re + im * im)
+                / (fft_size as f32 * fft_size as f32);
         }
 
         // analysis
         analyzer.update_spectrum(&spec_pow, tau_spec, dt_s);
-        let bars_target = analyzer.analyze_bands(tilt_alpha, dt_s, gate_open);
-        analyzer.apply_flow_and_spring(&bars_target, flow_k, spr_k, spr_zeta, dt_s);
+        let bars_target =
+            analyzer.analyze_bands(tilt_alpha, dt_s, gate_open);
+        analyzer.apply_flow_and_spring(
+            &bars_target,
+            flow_k,
+            spr_k,
+            spr_zeta,
+            dt_s,
+        );
 
         // draw
         queue!(
@@ -215,9 +249,21 @@ fn main() -> Result<()> {
 
         match orient {
             // Both call the same renderer now.
-            Orient::Vertical => draw_blocks_vertical(&mut out, &analyzer.bars_y, w, h, &lay)?,
-            Orient::Horizontal => draw_blocks_horizontal(&mut out, &analyzer.bars_y, w, h, &lay, mode)?,
+            Orient::Vertical => draw_blocks_vertical(
+                &mut out,
+                &analyzer.bars_y,
+                w,
+                h,
+                &lay,
+            )?,
+            Orient::Horizontal => draw_blocks_horizontal(
+                &mut out,
+                &analyzer.bars_y,
+                w,
+                h,
+                &lay,
+                mode,
+            )?,
         }
     }
 }
-

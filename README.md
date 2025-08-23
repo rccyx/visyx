@@ -2,92 +2,101 @@
 
 A terminal-based audio spectrum visualizer written in Rust.
 
-## Description
-
-Lookas is a lightweight audio spectrum analyzer that displays real-time audio visualization in your terminal. It captures audio input, performs FFT analysis, and renders the frequency spectrum as either vertical bars (like a traditional spectrum analyzer) or horizontal bars.
-
-<details>
-  <summary>Click to see the preview</summary>
-
-  ![Visualizer preview](https://github.com/user-attachments/assets/1533afdf-3826-4e14-839f-9b880864bac1)
-
-</details>
-
+![Lookas Visualization](https://raw.githubusercontent.com/ashgw/lookas/main/.github/assets/lookas_preview.gif)
 
 ## Features
 
-- Real-time audio visualization in the terminal
-- Automatic input device detection (prefers monitor devices)
-- Mel-scale frequency bands for better representation of how humans perceive sound
-- Vertical and horizontal visualization modes
-- Automatic gain control to adapt to different audio levels
+- Real-time audio spectrum visualization in your terminal
+- Automatic input device selection
+- Multiple visualization modes:
+  - Horizontal bars (default)
+  - Vertical bars
+  - Row mode (one band per row)
+  - Column mode (bands averaged into rows)
 - Smooth animations with spring physics
+- Adaptive gain control
+- Low CPU usage
+- Cross-platform support
 
 ## Installation
 
-```
-cargo install lookas
+### From source
+
+```bash
+# Clone the repository
+git clone https://github.com/ashgw/lookas
+cd lookas
+
+# Build and install
+cargo install --path .
 ```
 
 ## Usage
 
-Simply run the binary:
+Simply run:
 
-```
+```bash
 lookas
 ```
 
 ### Controls
 
-- `v`: Switch to vertical visualization mode
-- `h`: Switch to horizontal visualization mode
-- `q`: Quit the application
+- `h` - Switch to horizontal orientation
+- `v` - Switch to vertical orientation
+- `m` - Toggle between row and column modes
+- `q` - Quit
 
-## Needed
+### Configuration
 
-- Rust 1.70 or higher
-- ALSA development libraries (Linux)
-- CoreAudio (macOS)
-- WASAPI (Windows)
+Lookas can be configured using environment variables:
 
-### Linux Dependencies
+| Variable               | Description                          | Default |
+| ---------------------- | ------------------------------------ | ------- |
+| `LOOKAS_FMIN`          | Minimum frequency (Hz)               | 30.0    |
+| `LOOKAS_FMAX`          | Maximum frequency (Hz)               | 16000.0 |
+| `LOOKAS_TARGET_FPS_MS` | Target frame time in milliseconds    | 16      |
+| `LOOKAS_FFT_SIZE`      | FFT size                             | 2048    |
+| `LOOKAS_TAU_SPEC`      | Spectrum smoothing time constant     | 0.06    |
+| `LOOKAS_GATE_DB`       | Noise gate threshold (dB)            | -55.0   |
+| `LOOKAS_TILT_ALPHA`    | Frequency tilt factor                | 0.30    |
+| `LOOKAS_FLOW_K`        | Flow coefficient for bar interaction | 0.18    |
+| `LOOKAS_SPR_K`         | Spring stiffness                     | 60.0    |
+| `LOOKAS_SPR_ZETA`      | Spring damping factor                | 1.0     |
+| `LOOKAS_MODE`          | Default mode ("rows" or "columns")   | "rows"  |
 
-```
-sudo apt install libasound2-dev # on your preferred package manager
+Example:
+
+```bash
+LOOKAS_FMIN=50 LOOKAS_FMAX=10000 lookas
 ```
 
 ## How It Works
 
-1. Audio is captured from the default input device or a monitor device if available
-2. The audio signal is processed through a Fast Fourier Transform (FFT)
-3. The frequency spectrum is divided into Mel-scale bands for better perceptual representation
-4. The spectrum is visualized in the terminal using Unicode block characters
-5. Spring physics and lateral energy flow are applied to make the visualization more organic
+Lookas captures audio from your system's input device, performs a Fast Fourier Transform (FFT) to analyze the frequency content, and displays the result as animated bars in your terminal. The visualization includes:
 
-## Configuration
+1. Audio capture using the CPAL library
+2. FFT processing with rustfft
+3. Mel-scale frequency band analysis
+4. Dynamic range compression with automatic gain control
+5. Spring physics for smooth animations
+6. Terminal rendering using crossterm
 
-You can configure it using environment variables. The default values are used if no environment variables are set.
-
-| Environment Variable   | Description                                       | Default Value  |
-| ---------------------- | ------------------------------------------------- | -------------- |
-| `LOOKAS_FMIN`          | Minimum frequency to analyze                      | 30 Hz          |
-| `LOOKAS_FMAX`          | Maximum frequency to analyze                      | 16,000 Hz      |
-| `LOOKAS_TARGET_FPS_MS` | Target frame rate in milliseconds                 | 16ms (~60 FPS) |
-| `LOOKAS_FFT_SIZE`      | Size of the FFT window                            | 2048           |
-| `LOOKAS_GATE_DB`       | Noise gate threshold                              | -55 dB         |
-| `LOOKAS_TAU_SPEC`      | Spectrum smoothing time constant                  | 0.06           |
-| `LOOKAS_TILT_ALPHA`    | Frequency tilt factor (reduces low end dominance) | 0.30           |
-| `LOOKAS_FLOW_K`        | Lateral energy flow coefficient                   | 0.18           |
-| `LOOKAS_SPR_K`         | Spring stiffness for smooth motion                | 60.0           |
-| `LOOKAS_SPR_ZETA`      | Spring damping factor                             | 1.0            |
-
-### Example
+## Development
 
 ```bash
-# Run with custom settings
-LOOKAS_FMIN=50 LOOKAS_FMAX=12000 LOOKAS_GATE_DB=-60 lookas
+# Run the application
+cargo run
+
+# Format code
+just format
+
+# Run linter
+just clippy
+
+# Clean build artifacts
+just clean
 ```
 
 ## License
 
-[MIT](/LICENSE)
+MIT License
