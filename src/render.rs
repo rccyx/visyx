@@ -87,22 +87,38 @@ pub fn draw_bars(
             let shown = bars_len.min(rows);
             for &v_raw in bars.iter().take(shown) {
                 line.clear();
-                line.extend(std::iter::repeat_n(' ', lay.left_pad as usize));
+                line.extend(std::iter::repeat_n(
+                    ' ',
+                    lay.left_pad as usize,
+                ));
 
                 let v = v_raw.clamp(0.0, 1.0);
                 let cells = v * usable_w as f32;
                 let full = cells.floor() as usize;
 
-                line.extend(std::iter::repeat_n('█', full.min(usable_w)));
+                line.extend(std::iter::repeat_n(
+                    '█',
+                    full.min(usable_w),
+                ));
                 if full < usable_w {
                     let frac = (cells - full as f32).max(0.0);
-                    line.push(if frac > 0.0 { h_partial(frac) } else { ' ' });
+                    line.push(if frac > 0.0 {
+                        h_partial(frac)
+                    } else {
+                        ' '
+                    });
                     if usable_w > full + 1 {
-                        line.extend(std::iter::repeat_n(' ', usable_w - full - 1));
+                        line.extend(std::iter::repeat_n(
+                            ' ',
+                            usable_w - full - 1,
+                        ));
                     }
                 }
 
-                line.extend(std::iter::repeat_n(' ', lay.right_pad as usize));
+                line.extend(std::iter::repeat_n(
+                    ' ',
+                    lay.right_pad as usize,
+                ));
                 line.push('\n');
                 out.write_all(line.as_bytes())?;
             }
@@ -110,9 +126,15 @@ pub fn draw_bars(
             // pad remaining rows with empties
             for _ in shown..rows {
                 line.clear();
-                line.extend(std::iter::repeat_n(' ', lay.left_pad as usize));
+                line.extend(std::iter::repeat_n(
+                    ' ',
+                    lay.left_pad as usize,
+                ));
                 line.extend(std::iter::repeat_n(' ', usable_w));
-                line.extend(std::iter::repeat_n(' ', lay.right_pad as usize));
+                line.extend(std::iter::repeat_n(
+                    ' ',
+                    lay.right_pad as usize,
+                ));
                 line.push('\n');
                 out.write_all(line.as_bytes())?;
             }
