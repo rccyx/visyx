@@ -2,7 +2,7 @@
 
 A terminal-based audio spectrum visualizer written in Rust.
 
-![Lookas Visualization](https://raw.githubusercontent.com/ashgw/lookas/main/.github/assets/lookas_preview.gif)
+![Lookas Visualization](https://github.com/user-attachments/assets/1190509f-400b-46cb-adbe-5ea93c186199)
 
 ## How It Works
 
