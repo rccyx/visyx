@@ -79,7 +79,6 @@ fn main() -> Result<()> {
         let _ = terminal::disable_raw_mode();
     });
 
-    // Audio
     let device = pick_input_device()?;
     let name = device.name().unwrap_or_else(|_| "<unknown>".into());
     let cfg = best_config_for(&device)?;
@@ -103,26 +102,22 @@ fn main() -> Result<()> {
     };
     stream.play()?;
 
-    // FFT
     let window = hann(fft_size);
     let mut planner = FftPlanner::<f32>::new();
     let fft = planner.plan_fft_forward(fft_size);
     let half = fft_size / 2;
 
-    // State
     let mut last = Instant::now();
     let target_dt = Duration::from_millis(target_fps_ms);
     let mut analyzer = SpectrumAnalyzer::new(half);
-    let mut orient = Orient::Horizontal; // start on the good-looking one
-    let mut mode = mode_from_env(); // rows | columns
+    let mut orient = Orient::Horizontal;
+    let mut mode = mode_from_env();
 
-    // Buffers
     let mut buf = Vec::with_capacity(fft_size);
     let mut spec_pow = vec![0.0; half];
     let mut header = String::with_capacity(256);
 
     loop {
-        // keys
         if crossterm::event::poll(Duration::ZERO)? {
             if let crossterm::event::Event::Key(k) =
                 crossterm::event::read()?
@@ -143,7 +138,6 @@ fn main() -> Result<()> {
             }
         }
 
-        // frame pacing
         let now = Instant::now();
         let dt = now.duration_since(last);
         if dt < target_dt {
@@ -153,12 +147,10 @@ fn main() -> Result<()> {
         let dt_s = dt.as_secs_f32();
         last = now;
 
-        // layout (same engine for both orientations)
         let (w, h) = terminal::size()?;
         let lay = layout_for(w, h, orient, mode);
         let desired_bars = lay.bars;
 
-        // filters
         if analyzer.filters.len() != desired_bars {
             analyzer.filters = build_filterbank(
                 sr,
@@ -170,7 +162,6 @@ fn main() -> Result<()> {
             analyzer.resize(desired_bars);
         }
 
-        // samples
         let samples = if let Ok(buf) = shared.try_lock() {
             buf.latest()
         } else {
@@ -181,7 +172,6 @@ fn main() -> Result<()> {
         }
         let tail = &samples[samples.len() - fft_size..];
 
-        // gate
         let mut rms = 0.0;
         for &x in tail {
             rms += x * x;
@@ -190,12 +180,10 @@ fn main() -> Result<()> {
         let rms_db = 10.0 * (rms.max(1e-12)).log10();
         let gate_open = rms_db > gate_db;
 
-        // FFT
         buf.clear();
         buf = prepare_fft_input(tail, &window);
         fft.process(&mut buf);
 
-        // power spectrum
         for i in 0..half {
             let re = buf[i].re;
             let im = buf[i].im;
@@ -203,7 +191,6 @@ fn main() -> Result<()> {
                 / (fft_size as f32 * fft_size as f32);
         }
 
-        // analysis
         analyzer.update_spectrum(&spec_pow, tau_spec, dt_s);
         let bars_target =
             analyzer.analyze_bands(tilt_alpha, dt_s, gate_open);
@@ -215,7 +202,6 @@ fn main() -> Result<()> {
             dt_s,
         );
 
-        // draw
         queue!(
             out,
             terminal::Clear(ClearType::All),
@@ -248,7 +234,6 @@ fn main() -> Result<()> {
         out.write_all(header.as_bytes())?;
 
         match orient {
-            // Both call the same renderer now.
             Orient::Vertical => draw_blocks_vertical(
                 &mut out,
                 &analyzer.bars_y,

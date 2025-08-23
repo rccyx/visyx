@@ -133,7 +133,6 @@ impl SpectrumAnalyzer {
         let n = bars_target.len();
         let mut flowed = vec![0.0f32; n];
 
-        // Calculate flow for all bars
         for i in 0..n {
             let left = if i > 0 {
                 self.bars_y[i - 1]
@@ -149,7 +148,6 @@ impl SpectrumAnalyzer {
             flowed[i] = (bars_target[i] + flow).clamp(0.0, 1.0);
         }
 
-        // Apply spring physics
         let c = 2.0 * spr_k.sqrt() * spr_zeta;
 
         for (i, &flowed_val) in flowed.iter().enumerate().take(n) {

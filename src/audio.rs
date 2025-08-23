@@ -9,7 +9,6 @@ use std::sync::{Arc, Mutex};
 pub fn pick_input_device() -> Result<Device> {
     let host = cpal::default_host();
 
-    // First try to find a monitor device
     if let Ok(devices) = host.input_devices() {
         for dev in devices {
             if let Ok(name) = dev.name() {
@@ -20,7 +19,6 @@ pub fn pick_input_device() -> Result<Device> {
         }
     }
 
-    // Fall back to default device
     host.default_input_device()
         .context("No default input device")
 }

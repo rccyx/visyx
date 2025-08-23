@@ -1,7 +1,6 @@
 use crossterm::{cursor, queue};
 use std::io::{Stdout, Write};
 
-/// Horizontal cell glyphs used to render partial bars.
 const HBLOCKS: [char; 9] =
     [' ', '▏', '▎', '▍', '▌', '▋', '▊', '▉', '█'];
 
@@ -11,7 +10,6 @@ pub enum Orient {
     Horizontal,
 }
 
-/// Display mode: one bar per terminal row or dense averaging per row.
 #[derive(Clone, Copy, PartialEq)]
 pub enum Mode {
     Rows,
@@ -36,7 +34,6 @@ pub fn layout_for(
     let right_pad = 2u16;
     let usable_cols = w.saturating_sub(left_pad + right_pad);
 
-    // Orientation no longer changes the drawing engine; we render horizontal bars.
     let bars = match mode {
         Mode::Rows => h.saturating_sub(3).max(1) as usize,
         Mode::Columns => usable_cols.max(10) as usize,
@@ -61,7 +58,6 @@ fn h_partial(frac: f32) -> char {
     HBLOCKS[level_from_frac(frac, 0.70)]
 }
 
-/// Unified bar renderer for both orientations.
 pub fn draw_bars(
     out: &mut Stdout,
     bars: &[f32],
@@ -83,7 +79,6 @@ pub fn draw_bars(
 
     match lay.mode {
         Mode::Rows => {
-            // render available bars up to the number of rows
             let shown = bars_len.min(rows);
             for &v_raw in bars.iter().take(shown) {
                 line.clear();
@@ -123,7 +118,6 @@ pub fn draw_bars(
                 out.write_all(line.as_bytes())?;
             }
 
-            // pad remaining rows with empties
             for _ in shown..rows {
                 line.clear();
                 line.extend(std::iter::repeat_n(
@@ -140,7 +134,6 @@ pub fn draw_bars(
             }
         }
         Mode::Columns => {
-            // dense: many bands averaged into each row
             let per_row = bars_len.max(1).div_ceil(rows);
             for row in 0..rows {
                 line.clear();
