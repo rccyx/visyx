@@ -83,49 +83,43 @@ pub fn draw_bars(
 
     match lay.mode {
         Mode::Rows => {
-            // classic: one band per row (fills height)
-            for row in 0..rows {
+            // render available bars up to the number of rows
+            let shown = bars_len.min(rows);
+            for &v_raw in bars.iter().take(shown) {
                 line.clear();
-                line.extend(std::iter::repeat_n(
-                    ' ',
-                    lay.left_pad as usize,
-                ));
+                line.extend(std::iter::repeat_n(' ', lay.left_pad as usize));
 
-                let v = if row < bars_len { bars[row] } else { 0.0 };
-                let v = v.clamp(0.0, 1.0);
+                let v = v_raw.clamp(0.0, 1.0);
                 let cells = v * usable_w as f32;
                 let full = cells.floor() as usize;
 
-                line.extend(std::iter::repeat_n(
-                    '█',
-                    full.min(usable_w),
-                ));
+                line.extend(std::iter::repeat_n('█', full.min(usable_w)));
                 if full < usable_w {
                     let frac = (cells - full as f32).max(0.0);
-                    line.push(if frac > 0.0 {
-                        h_partial(frac)
-                    } else {
-                        ' '
-                    });
+                    line.push(if frac > 0.0 { h_partial(frac) } else { ' ' });
                     if usable_w > full + 1 {
-                        line.extend(std::iter::repeat_n(
-                            ' ',
-                            usable_w - full - 1,
-                        ));
+                        line.extend(std::iter::repeat_n(' ', usable_w - full - 1));
                     }
                 }
 
-                line.extend(std::iter::repeat_n(
-                    ' ',
-                    lay.right_pad as usize,
-                ));
+                line.extend(std::iter::repeat_n(' ', lay.right_pad as usize));
+                line.push('\n');
+                out.write_all(line.as_bytes())?;
+            }
+
+            // pad remaining rows with empties
+            for _ in shown..rows {
+                line.clear();
+                line.extend(std::iter::repeat_n(' ', lay.left_pad as usize));
+                line.extend(std::iter::repeat_n(' ', usable_w));
+                line.extend(std::iter::repeat_n(' ', lay.right_pad as usize));
                 line.push('\n');
                 out.write_all(line.as_bytes())?;
             }
         }
         Mode::Columns => {
             // dense: many bands averaged into each row
-            let per_row = (bars_len.max(1) + rows - 1) / rows; // ceil
+            let per_row = bars_len.max(1).div_ceil(rows);
             for row in 0..rows {
                 line.clear();
                 line.extend(std::iter::repeat_n(
@@ -137,8 +131,8 @@ pub fn draw_bars(
                 if start < bars_len {
                     let end = (start + per_row).min(bars_len);
                     let mut acc = 0.0f32;
-                    for i in start..end {
-                        acc += bars[i].clamp(0.0, 1.0);
+                    for &val in bars[start..end].iter() {
+                        acc += val.clamp(0.0, 1.0);
                     }
                     let v =
                         (acc / (end - start) as f32).clamp(0.0, 1.0);
