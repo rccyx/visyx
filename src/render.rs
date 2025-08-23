@@ -1,7 +1,7 @@
 use crossterm::{cursor, queue};
 use std::io::{Stdout, Write};
 
-/// width partials for clean bar tips (no dithering)
+/// Horizontal cell glyphs used to render partial bars.
 const HBLOCKS: [char; 9] =
     [' ', '▏', '▎', '▍', '▌', '▋', '▊', '▉', '█'];
 
@@ -11,7 +11,7 @@ pub enum Orient {
     Horizontal,
 }
 
-/// One bar per terminal row (fills height)  vs  dense: many bars → each row (averaged)
+/// Display mode: one bar per terminal row or dense averaging per row.
 #[derive(Clone, Copy, PartialEq)]
 pub enum Mode {
     Rows,
@@ -36,8 +36,7 @@ pub fn layout_for(
     let right_pad = 2u16;
     let usable_cols = w.saturating_sub(left_pad + right_pad);
 
-    // IMPORTANT: orientation does not change the drawing engine anymore.
-    // We always render horizontal bars; mode picks resolution strategy.
+    // Orientation no longer changes the drawing engine; we render horizontal bars.
     let bars = match mode {
         Mode::Rows => h.saturating_sub(3).max(1) as usize,
         Mode::Columns => usable_cols.max(10) as usize,
@@ -56,12 +55,13 @@ fn level_from_frac(frac: f32, gamma: f32) -> usize {
     let f = frac.clamp(0.0, 0.9999).powf(gamma);
     ((f * 8.0) + 0.5).floor().clamp(0.0, 8.0) as usize
 }
+
 #[inline]
 fn h_partial(frac: f32) -> char {
     HBLOCKS[level_from_frac(frac, 0.70)]
 }
 
-/// Single renderer used for BOTH “h” and “v”.
+/// Unified bar renderer for both orientations.
 pub fn draw_bars(
     out: &mut Stdout,
     bars: &[f32],
@@ -86,19 +86,20 @@ pub fn draw_bars(
             // classic: one band per row (fills height)
             for row in 0..rows {
                 line.clear();
-                line.extend(
-                    std::iter::repeat(' ')
-                        .take(lay.left_pad as usize),
-                );
+                line.extend(std::iter::repeat_n(
+                    ' ',
+                    lay.left_pad as usize,
+                ));
 
                 let v = if row < bars_len { bars[row] } else { 0.0 };
                 let v = v.clamp(0.0, 1.0);
                 let cells = v * usable_w as f32;
                 let full = cells.floor() as usize;
 
-                line.extend(
-                    std::iter::repeat('█').take(full.min(usable_w)),
-                );
+                line.extend(std::iter::repeat_n(
+                    '█',
+                    full.min(usable_w),
+                ));
                 if full < usable_w {
                     let frac = (cells - full as f32).max(0.0);
                     line.push(if frac > 0.0 {
@@ -107,17 +108,17 @@ pub fn draw_bars(
                         ' '
                     });
                     if usable_w > full + 1 {
-                        line.extend(
-                            std::iter::repeat(' ')
-                                .take(usable_w - full - 1),
-                        );
+                        line.extend(std::iter::repeat_n(
+                            ' ',
+                            usable_w - full - 1,
+                        ));
                     }
                 }
 
-                line.extend(
-                    std::iter::repeat(' ')
-                        .take(lay.right_pad as usize),
-                );
+                line.extend(std::iter::repeat_n(
+                    ' ',
+                    lay.right_pad as usize,
+                ));
                 line.push('\n');
                 out.write_all(line.as_bytes())?;
             }
@@ -127,10 +128,10 @@ pub fn draw_bars(
             let per_row = (bars_len.max(1) + rows - 1) / rows; // ceil
             for row in 0..rows {
                 line.clear();
-                line.extend(
-                    std::iter::repeat(' ')
-                        .take(lay.left_pad as usize),
-                );
+                line.extend(std::iter::repeat_n(
+                    ' ',
+                    lay.left_pad as usize,
+                ));
 
                 let start = row * per_row;
                 if start < bars_len {
@@ -145,10 +146,10 @@ pub fn draw_bars(
                     let cells = v * usable_w as f32;
                     let full = cells.floor() as usize;
 
-                    line.extend(
-                        std::iter::repeat('█')
-                            .take(full.min(usable_w)),
-                    );
+                    line.extend(std::iter::repeat_n(
+                        '█',
+                        full.min(usable_w),
+                    ));
                     if full < usable_w {
                         let frac = (cells - full as f32).max(0.0);
                         line.push(if frac > 0.0 {
@@ -157,22 +158,20 @@ pub fn draw_bars(
                             ' '
                         });
                         if usable_w > full + 1 {
-                            line.extend(
-                                std::iter::repeat(' ')
-                                    .take(usable_w - full - 1),
-                            );
+                            line.extend(std::iter::repeat_n(
+                                ' ',
+                                usable_w - full - 1,
+                            ));
                         }
                     }
                 } else {
-                    line.extend(
-                        std::iter::repeat(' ').take(usable_w),
-                    );
+                    line.extend(std::iter::repeat_n(' ', usable_w));
                 }
 
-                line.extend(
-                    std::iter::repeat(' ')
-                        .take(lay.right_pad as usize),
-                );
+                line.extend(std::iter::repeat_n(
+                    ' ',
+                    lay.right_pad as usize,
+                ));
                 line.push('\n');
                 out.write_all(line.as_bytes())?;
             }
@@ -183,7 +182,7 @@ pub fn draw_bars(
     Ok(())
 }
 
-// Backwards-compat wrappers so the rest of the code can call either name.
+// backwards-compat wrappers so the rest of the code can call either name
 #[inline]
 pub fn draw_blocks_horizontal(
     out: &mut Stdout,
@@ -195,6 +194,7 @@ pub fn draw_blocks_horizontal(
 ) -> std::io::Result<()> {
     draw_bars(out, bars, w, h, lay)
 }
+
 #[inline]
 pub fn draw_blocks_vertical(
     out: &mut Stdout,

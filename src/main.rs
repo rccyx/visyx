@@ -123,7 +123,7 @@ fn main() -> Result<()> {
 
     loop {
         // keys
-        if crossterm::event::poll(Duration::from_millis(0))? {
+        if crossterm::event::poll(Duration::ZERO)? {
             if let crossterm::event::Event::Key(k) =
                 crossterm::event::read()?
             {

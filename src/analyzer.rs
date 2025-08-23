@@ -108,7 +108,7 @@ impl SpectrumAnalyzer {
         }
 
         let mut sorted = db_per_band.to_vec();
-        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        sorted.sort_by(|a, b| a.total_cmp(b));
 
         let idx_low =
             ((sorted.len() - 1) as f32 * 0.10).round() as usize;
@@ -151,7 +151,6 @@ impl SpectrumAnalyzer {
 
         // Apply spring physics
         let c = 2.0 * spr_k.sqrt() * spr_zeta;
-        // Removed unused variable dt_s_sq
 
         for (i, &flowed_val) in flowed.iter().enumerate().take(n) {
             let a = spr_k * (flowed_val - self.bars_y[i])
