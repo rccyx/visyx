@@ -38,7 +38,7 @@ Lookas can be configured using environment variables:
 | `LOOKAS_FLOW_K`        | Flow coefficient for bar interaction | 0.18    |
 | `LOOKAS_SPR_K`         | Spring stiffness                     | 60.0    |
 | `LOOKAS_SPR_ZETA`      | Spring damping factor                | 1.0     |
-| `LOOKAS_MODE`          | Default mode ("rows" or "columns")   | "rows"  |
+| `LOOKAS_MODE`          | Display mode ("rows" or "columns")   | "rows"  |
 
 Example:
 

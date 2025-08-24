@@ -111,7 +111,7 @@ fn main() -> Result<()> {
     let target_dt = Duration::from_millis(target_fps_ms);
     let mut analyzer = SpectrumAnalyzer::new(half);
     let mut orient = Orient::Horizontal;
-    let mut mode = mode_from_env();
+    let mode = mode_from_env();
 
     let mut buf = Vec::with_capacity(fft_size);
     let mut spec_pow = vec![0.0; half];
@@ -127,12 +127,7 @@ fn main() -> Result<()> {
                     Char('q') => return Ok(()),
                     Char('v') => orient = Orient::Vertical,
                     Char('h') => orient = Orient::Horizontal,
-                    Char('m') => {
-                        mode = match mode {
-                            Mode::Rows => Mode::Columns,
-                            Mode::Columns => Mode::Rows,
-                        }
-                    }
+
                     _ => {}
                 }
             }
@@ -230,7 +225,7 @@ fn main() -> Result<()> {
             analyzer.db_low - 3.0,
             analyzer.db_high + 6.0
         );
-        header.push_str("]  |  v/h to switch, m mode, q quits\n");
+        header.push_str("]  |  v/h to switch, q quits\n");
         out.write_all(header.as_bytes())?;
 
         match orient {
