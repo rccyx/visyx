@@ -59,6 +59,10 @@ fn main() -> Result<()> {
     let spr_k: f32 = get_env("LOOKAS_SPR_K", 60.0);
     let spr_zeta: f32 = get_env("LOOKAS_SPR_ZETA", 1.0);
 
+    // HUD is OFF by default; set LOOKAS_HUD=1 to show it.
+    let show_hud: bool = get_env("LOOKAS_HUD", 0u8) != 0;
+    let top_pad: u16 = if show_hud { 1 } else { 0 };
+
     let mut out = stdout();
     terminal::enable_raw_mode()?;
     execute!(
@@ -127,7 +131,6 @@ fn main() -> Result<()> {
                     Char('q') => return Ok(()),
                     Char('v') => orient = Orient::Vertical,
                     Char('h') => orient = Orient::Horizontal,
-
                     _ => {}
                 }
             }
@@ -143,7 +146,7 @@ fn main() -> Result<()> {
         last = now;
 
         let (w, h) = terminal::size()?;
-        let lay = layout_for(w, h, orient, mode);
+        let lay = layout_for(w, h, orient, mode, top_pad);
         let desired_bars = lay.bars;
 
         if analyzer.filters.len() != desired_bars {
@@ -204,29 +207,31 @@ fn main() -> Result<()> {
             SetForegroundColor(Color::White)
         )?;
 
-        header.clear();
-        header.push_str("  lookas  |  input: ");
-        header.push_str(&name);
-        header.push_str("  |  orient: ");
-        header.push_str(match orient {
-            Orient::Vertical => "vertical",
-            Orient::Horizontal => "horizontal",
-        });
-        header.push_str("  |  mode: ");
-        header.push_str(match mode {
-            Mode::Rows => "rows",
-            Mode::Columns => "columns",
-        });
-        header.push_str("  |  auto gain [");
-        use std::fmt::Write;
-        let _ = write!(
-            header,
-            "{:.1}..{:.1} dB",
-            analyzer.db_low - 3.0,
-            analyzer.db_high + 6.0
-        );
-        header.push_str("]  |  v/h to switch, q quits\n");
-        out.write_all(header.as_bytes())?;
+        if show_hud {
+            header.clear();
+            header.push_str("  lookas  |  input: ");
+            header.push_str(&name);
+            header.push_str("  |  orient: ");
+            header.push_str(match orient {
+                Orient::Vertical => "vertical",
+                Orient::Horizontal => "horizontal",
+            });
+            header.push_str("  |  mode: ");
+            header.push_str(match mode {
+                Mode::Rows => "rows",
+                Mode::Columns => "columns",
+            });
+            header.push_str("  |  auto gain [");
+            use std::fmt::Write;
+            let _ = write!(
+                header,
+                "{:.1}..{:.1} dB",
+                analyzer.db_low - 3.0,
+                analyzer.db_high + 6.0
+            );
+            header.push_str("]  |  v/h to switch, q quits\n");
+            out.write_all(header.as_bytes())?;
+        }
 
         match orient {
             Orient::Vertical => draw_blocks_vertical(
