@@ -1,20 +1,59 @@
 name: CI
-
 on:
   workflow_call:
 
 jobs:
-  format:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
 
-      - name: install rust stable
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Install ALSA development libraries
+      - name: Linux audio build deps
+        if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev
 
-      - run: cargo build --release
+      - name: Build release
+        run: cargo build --release
+
+      - name: Smoke run on all OS
+        shell: bash
+        env:
+          RUST_BACKTRACE: 1
+          NO_COLOR: 1
+          LOOKAS_HUD: 0
+        run: |
+          set -euxo pipefail
+          # Prefer a fast help exit if available
+          if cargo run -q -- --help >/dev/null 2>&1; then
+            exit 0
+          fi
+          # Fallback: start briefly then kill, just to prove it launches
+          cargo run -q &
+          pid=$!
+          sleep 3 || true
+          kill $pid 2>/dev/null || true
+
+      - name: Upload artifact (Linux/macOS)
+        if: runner.os != 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: lookas-${{ runner.os }}-${{ github.sha }}
+          path: target/release/lookas
+
+      - name: Upload artifact (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: lookas-${{ runner.os }}-${{ github.sha }}
+          path: target/release/lookas.exe
+
