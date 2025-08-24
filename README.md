@@ -1,13 +1,24 @@
-# Lookas
+<p align="center">
+  <img src="https://raw.githubusercontent.com/rust-lang/rust-artwork/master/logo/rust-logo-256x256.png" height="80" alt="Rust Logo"/>
+</p>
 
-[![Rust](https://img.shields.io/badge/rust-1.70+-orange.svg)](https://www.rust-lang.org)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Crates.io](https://img.shields.io/crates/v/lookas.svg)](https://crates.io/crates/lookas)
+<h1 align="center">Lookas</h1>
+
+<p align="center">
+  <a href="https://www.rust-lang.org">
+    <img src="https://img.shields.io/badge/Rust-1.70+-black?logo=rust&logoColor=white&style=for-the-badge" alt="Rust"/>
+  </a>
+  <a href="https://opensource.org/licenses/MIT">
+    <img src="https://img.shields.io/badge/License-MIT-blue?logo=open-source-initiative&logoColor=white&style=for-the-badge" alt="License: MIT"/>
+  </a>
+  <a href="https://crates.io/crates/lookas">
+    <img src="https://img.shields.io/crates/v/lookas?color=orange&logo=rust&style=for-the-badge" alt="Crates.io"/>
+  </a>
+</p>
 
 A high-performance, terminal-based audio spectrum visualizer written in Rust that transforms your audio into mesmerizing real-time visual patterns.
 
-
-![Lookas Visualization](https://github.com/user-attachments/assets/a0e2d146-9f10-4b8b-b2b5-2063338c98f3)
+![Lookas Visualization](https://github.com/user-attachments/assets/458ab702-0b5b-4bb7-a071-ad9e61da621e)
 
 ## What It Does
 
