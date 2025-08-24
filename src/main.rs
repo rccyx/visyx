@@ -10,7 +10,7 @@ use lookas::{
     analyzer::SpectrumAnalyzer,
     audio::{best_config_for, build_stream, pick_input_device},
     buffer::SharedBuf,
-    dsp::{hann, prepare_fft_input},
+    dsp::{hann, prepare_fft_input_inplace},
     filterbank::build_filterbank,
     render::{
         draw_blocks_horizontal, draw_blocks_vertical, layout_for,
@@ -59,7 +59,7 @@ fn main() -> Result<()> {
     let spr_k: f32 = get_env("LOOKAS_SPR_K", 60.0);
     let spr_zeta: f32 = get_env("LOOKAS_SPR_ZETA", 1.0);
 
-    // HUD is OFF by default; set LOOKAS_HUD=1 to show it.
+    // hud is off by default; set LOOKAS_HUD=1 to show it
     let show_hud: bool = get_env("LOOKAS_HUD", 0u8) != 0;
     let top_pad: u16 = if show_hud { 1 } else { 0 };
 
@@ -163,6 +163,7 @@ fn main() -> Result<()> {
         let samples = if let Ok(buf) = shared.try_lock() {
             buf.latest()
         } else {
+            thread::sleep(Duration::from_millis(1));
             continue;
         };
         if samples.len() < fft_size {
@@ -178,8 +179,7 @@ fn main() -> Result<()> {
         let rms_db = 10.0 * (rms.max(1e-12)).log10();
         let gate_open = rms_db > gate_db;
 
-        buf.clear();
-        buf = prepare_fft_input(tail, &window);
+        prepare_fft_input_inplace(tail, &window, &mut buf);
         fft.process(&mut buf);
 
         for i in 0..half {

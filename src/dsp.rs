@@ -37,3 +37,19 @@ pub fn prepare_fft_input(
     }
     result
 }
+
+#[inline]
+pub fn prepare_fft_input_inplace(
+    samples: &[f32],
+    window: &[f32],
+    buf: &mut Vec<Complex<f32>>,
+) {
+    buf.clear();
+    buf.reserve(samples.len());
+    for (i, &x) in samples.iter().enumerate() {
+        buf.push(Complex {
+            re: x * window[i],
+            im: 0.0,
+        });
+    }
+}

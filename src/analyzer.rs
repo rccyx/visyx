@@ -107,7 +107,8 @@ impl SpectrumAnalyzer {
             return;
         }
 
-        let mut sorted = db_per_band.to_vec();
+        let mut sorted = Vec::with_capacity(db_per_band.len());
+        sorted.extend_from_slice(db_per_band);
         sorted.sort_by(|a, b| a.total_cmp(b));
 
         let idx_low =

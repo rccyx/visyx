@@ -43,7 +43,7 @@ where
     let stream = device.build_input_stream(
         &cfg,
         move |data: &[T], _| {
-            // Try to acquire lock, skip if busy
+            // try to acquire lock, skip if busy
             if let Ok(mut buf) = shared.try_lock() {
                 let frames = data.chunks_exact(ch);
                 for frame in frames {

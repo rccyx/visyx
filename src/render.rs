@@ -25,7 +25,7 @@ pub struct Layout {
     pub bars: usize, // analyzer resolution (bands)
     pub left_pad: u16,
     pub right_pad: u16,
-    pub top_pad: u16, // rows reserved at top (0 when HUD off)
+    pub top_pad: u16, // rows reserved at top (0 when hud off)
     pub mode: Mode,
 }
 
@@ -71,7 +71,7 @@ fn v_partial(frac: f32) -> char {
     VBLOCKS[idx.min(8)]
 }
 
-// write N spaces without allocating a Vec
+// write n spaces without allocating a vec
 #[inline]
 fn write_spaces(
     out: &mut Stdout,
@@ -88,7 +88,7 @@ fn write_spaces(
     Ok(())
 }
 
-// ---------------- HORIZONTAL ----------------
+// horizontal
 
 pub fn draw_bars(
     out: &mut Stdout,
@@ -106,7 +106,7 @@ pub fn draw_bars(
 
     queue!(out, cursor::MoveTo(0, lay.top_pad))?;
 
-    let mut line = String::with_capacity(w as usize + 1);
+    let mut line = String::with_capacity((w as usize + 1).max(256));
     let bars_len = bars.len();
 
     match lay.mode {
@@ -204,7 +204,7 @@ pub fn draw_bars(
     Ok(())
 }
 
-// ---------------- VERTICAL with VBLOCKS ----------------
+// vertical with vblocks
 
 fn draw_columns_vertical(
     out: &mut Stdout,
