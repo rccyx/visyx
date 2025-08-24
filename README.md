@@ -6,7 +6,8 @@
 
 A high-performance, terminal-based audio spectrum visualizer written in Rust that transforms your audio into mesmerizing real-time visual patterns.
 
-![Lookas Visualization](https://github.com/user-attachments/assets/1190509f-400b-46cb-adbe-5ea93c186199)
+
+![Lookas Visualization](https://github.com/user-attachments/assets/a0e2d146-9f10-4b8b-b2b5-2063338c98f3)
 
 ## What It Does
 
