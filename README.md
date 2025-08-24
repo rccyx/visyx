@@ -96,17 +96,11 @@ LOOKAS_FMIN=40 LOOKAS_FMAX=12000 LOOKAS_TAU_SPEC=0.12 lookas
 
 ## How It Works
 
-Got it. You don’t want a bulleted technical spec sheet, you want flowing text that feels sharp, readable, and professional, but still explains exactly what’s happening. Here’s a rewritten version in that style:
-
----
-
-## How It Works
-
-Lookas runs a fast, low-latency audio pipeline built to turn raw sound into smooth, responsive visuals. It starts by hooking directly into your system audio, through a loopback device, so what you see is exactly what you hear—no setup friction, no manual wiring.
+Lookas runs a fast, low-latency audio pipeline built to turn raw sound into smooth, responsive visuals. It starts by hooking directly into your system audio, through a loopback device, so what you see is exactly what you hear, no setup friction, no manual wiring.
 
 The signal is then windowed with Hann smoothing to avoid leakage and pushed through an FFT to break the stream into frequency components. Those raw bins are remapped onto a mel-scale filterbank so the output reflects how we actually perceive sound rather than just a grid of math.
 
-To keep the display clean and balanced, the program constantly adjusts its dynamic range. It tracks energy percentiles to scale loudness in real time, cuts off background hiss with noise gating, and applies frequency tilt so no single band overwhelms the others. The result is a visual field that feels natural and reacts instantly to changes in the mix.
+To keep the display clean and balanced, it constantly adjusts its dynamic range. It tracks energy percentiles to scale loudness in real time, cuts off background hiss with noise gating, and applies frequency tilt so no single band overwhelms the others. The result is a visual field that feels natural and reacts instantly to changes in the mix.
 
 On top of that sits a lightweight physics model. Instead of raw bar jumps, Lookas runs each band through a spring-damper system so motion carries weight and flow. Energy diffuses between neighbors, giving the spectrum a fluid, wave-like feel. Every calculation is written to avoid allocations on the hot path, which means it runs smooth even at high refresh.
 
@@ -117,3 +111,4 @@ On modern machines, this translates to a consistent 60+ frames per second with s
 ## License
 
 [MIT](LICENSE)
+
