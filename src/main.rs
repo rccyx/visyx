@@ -198,6 +198,7 @@ fn main() -> Result<()> {
             spr_k,
             spr_zeta,
             dt_s,
+            gate_open,
         );
 
         queue!(

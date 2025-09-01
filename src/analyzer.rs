@@ -130,8 +130,25 @@ impl SpectrumAnalyzer {
         spr_k: f32,
         spr_zeta: f32,
         dt_s: f32,
+        gate_open: bool,
     ) {
         let n = bars_target.len();
+        
+        // If gate is closed, rapidly decay all bars to zero
+        if !gate_open {
+            let decay_factor = (-20.0 * dt_s).exp(); // Very fast decay when no audio
+            for i in 0..n {
+                self.bars_y[i] *= decay_factor;
+                self.bars_v[i] *= decay_factor;
+                // Set to zero if very small to avoid floating point artifacts
+                if self.bars_y[i] < 0.001 {
+                    self.bars_y[i] = 0.0;
+                    self.bars_v[i] = 0.0;
+                }
+            }
+            return;
+        }
+
         let mut flowed = vec![0.0f32; n];
 
         for i in 0..n {
