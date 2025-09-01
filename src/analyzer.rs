@@ -133,7 +133,7 @@ impl SpectrumAnalyzer {
         gate_open: bool,
     ) {
         let n = bars_target.len();
-        
+
         // If gate is closed, rapidly decay all bars to zero
         if !gate_open {
             let decay_factor = (-20.0 * dt_s).exp(); // Very fast decay when no audio
