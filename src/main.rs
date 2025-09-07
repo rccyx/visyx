@@ -114,7 +114,7 @@ fn main() -> Result<()> {
     let mut last = Instant::now();
     let target_dt = Duration::from_millis(target_fps_ms);
     let mut analyzer = SpectrumAnalyzer::new(half);
-    let mut orient = Orient::Horizontal;
+    let mut orient = Orient::Vertical;
     let mode = mode_from_env();
 
     let mut buf = Vec::with_capacity(fft_size);
@@ -253,3 +253,4 @@ fn main() -> Result<()> {
         }
     }
 }
+
