@@ -48,7 +48,6 @@ fn mode_from_env() -> Mode {
 }
 
 fn main() -> Result<()> {
-    // 🔇 Silence ALSA/CPAL/system stderr output before any backend init
     unsafe {
         use libc::dup2;
         use std::fs::OpenOptions;
@@ -119,7 +118,6 @@ fn main() -> Result<()> {
     };
     stream.play()?;
 
-    // Final clear in case any underlying libs still printed text
     execute!(
         out,
         terminal::Clear(ClearType::All),
@@ -273,3 +271,4 @@ fn main() -> Result<()> {
         }
     }
 }
+
