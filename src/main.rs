@@ -48,6 +48,7 @@ fn mode_from_env() -> Mode {
 }
 
 fn main() -> Result<()> {
+    #[cfg(unix)]
     unsafe {
         use libc::dup2;
         use std::fs::OpenOptions;
@@ -71,7 +72,6 @@ fn main() -> Result<()> {
     let spr_k: f32 = get_env("LOOKAS_SPR_K", 60.0);
     let spr_zeta: f32 = get_env("LOOKAS_SPR_ZETA", 1.0);
 
-    // HUD is off by default; set LOOKAS_HUD=1 to show
     let show_hud: bool = get_env("LOOKAS_HUD", 0u8) != 0;
     let top_pad: u16 = if show_hud { 1 } else { 0 };
 
@@ -103,8 +103,7 @@ fn main() -> Result<()> {
     let ring_len = (sr as usize / 10).max(fft_size * 3);
     let shared = Arc::new(Mutex::new(SharedBuf::new(ring_len)));
 
-    let stream = match device.default_input_config()?.sample_format()
-    {
+    let stream = match device.default_input_config()?.sample_format() {
         SampleFormat::F32 => {
             build_stream::<f32>(device, cfg.clone(), shared.clone())?
         }
@@ -271,3 +270,4 @@ fn main() -> Result<()> {
         }
     }
 }
+
