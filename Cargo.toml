@@ -13,5 +13,6 @@ categories = ["multimedia", "visualization", "command-line-utilities"]
 anyhow = "1.0"
 cpal = "0.15"
 crossterm = "0.27"
+libc = "0.2.176"
 rustfft = "6"
 

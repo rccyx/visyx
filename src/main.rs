@@ -48,6 +48,19 @@ fn mode_from_env() -> Mode {
 }
 
 fn main() -> Result<()> {
+    // 🔇 Silence ALSA/CPAL/system stderr output before any backend init
+    unsafe {
+        use libc::dup2;
+        use std::fs::OpenOptions;
+        use std::os::unix::io::AsRawFd;
+
+        if let Ok(devnull) =
+            OpenOptions::new().write(true).open("/dev/null")
+        {
+            dup2(devnull.as_raw_fd(), libc::STDERR_FILENO);
+        }
+    }
+
     let fmin: f32 = get_env("LOOKAS_FMIN", 30.0);
     let fmax: f32 = get_env("LOOKAS_FMAX", 16_000.0);
     let target_fps_ms: u64 = get_env("LOOKAS_TARGET_FPS_MS", 16);
@@ -59,7 +72,7 @@ fn main() -> Result<()> {
     let spr_k: f32 = get_env("LOOKAS_SPR_K", 60.0);
     let spr_zeta: f32 = get_env("LOOKAS_SPR_ZETA", 1.0);
 
-    // hud is off by default; set LOOKAS_HUD=1 to show it
+    // HUD is off by default; set LOOKAS_HUD=1 to show
     let show_hud: bool = get_env("LOOKAS_HUD", 0u8) != 0;
     let top_pad: u16 = if show_hud { 1 } else { 0 };
 
@@ -105,6 +118,13 @@ fn main() -> Result<()> {
         _ => anyhow::bail!("Unsupported sample format"),
     };
     stream.play()?;
+
+    // Final clear in case any underlying libs still printed text
+    execute!(
+        out,
+        terminal::Clear(ClearType::All),
+        cursor::MoveTo(0, 0)
+    )?;
 
     let window = hann(fft_size);
     let mut planner = FftPlanner::<f32>::new();
