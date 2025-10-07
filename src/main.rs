@@ -103,7 +103,8 @@ fn main() -> Result<()> {
     let ring_len = (sr as usize / 10).max(fft_size * 3);
     let shared = Arc::new(Mutex::new(SharedBuf::new(ring_len)));
 
-    let stream = match device.default_input_config()?.sample_format() {
+    let stream = match device.default_input_config()?.sample_format()
+    {
         SampleFormat::F32 => {
             build_stream::<f32>(device, cfg.clone(), shared.clone())?
         }
@@ -270,4 +271,3 @@ fn main() -> Result<()> {
         }
     }
 }
-
