@@ -30,7 +30,7 @@ jobs:
         env:
           RUST_BACKTRACE: 1
           NO_COLOR: 1
-          LOOKAS_HUD: 0
+          VISYX_HUD: 0
         run: |
           set -euxo pipefail
           # Prefer a fast help exit if available
@@ -47,13 +47,12 @@ jobs:
         if: runner.os != 'Windows'
         uses: actions/upload-artifact@v4
         with:
-          name: lookas-${{ runner.os }}-${{ github.sha }}
-          path: target/release/lookas
+          name: visyx-${{ runner.os }}-${{ github.sha }}
+          path: target/release/visyx
 
       - name: Upload artifact (Windows)
         if: runner.os == 'Windows'
         uses: actions/upload-artifact@v4
         with:
-          name: lookas-${{ runner.os }}-${{ github.sha }}
-          path: target/release/lookas.exe
-
+          name: visyx-${{ runner.os }}-${{ github.sha }}
+          path: target/release/visyx.exe

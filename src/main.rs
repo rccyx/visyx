@@ -6,7 +6,15 @@ use crossterm::{
     style::{Color, SetForegroundColor},
     terminal::{self, ClearType},
 };
-use lookas::{
+use rustfft::FftPlanner;
+use std::{
+    env,
+    io::{stdout, Write},
+    sync::{Arc, Mutex},
+    thread,
+    time::{Duration, Instant},
+};
+use visyx::{
     analyzer::SpectrumAnalyzer,
     audio::{best_config_for, build_stream, pick_input_device},
     buffer::SharedBuf,
@@ -18,14 +26,6 @@ use lookas::{
     },
     utils::scopeguard,
 };
-use rustfft::FftPlanner;
-use std::{
-    env,
-    io::{stdout, Write},
-    sync::{Arc, Mutex},
-    thread,
-    time::{Duration, Instant},
-};
 
 #[inline]
 fn get_env<T: std::str::FromStr>(name: &str, default: T) -> T {
@@ -36,9 +36,9 @@ fn get_env<T: std::str::FromStr>(name: &str, default: T) -> T {
 }
 
 fn mode_from_env() -> Mode {
-    let s = env::var("LOOKAS_MODE")
-        .or_else(|_| env::var("LOOKAS_HORZ_MODE"))
-        .or_else(|_| env::var("LOOKAS_VERT_MODE"))
+    let s = env::var("VISYX_MODE")
+        .or_else(|_| env::var("VISYX_HORZ_MODE"))
+        .or_else(|_| env::var("VISYX_VERT_MODE"))
         .unwrap_or_else(|_| "rows".into())
         .to_lowercase();
     match s.as_str() {
@@ -61,18 +61,18 @@ fn main() -> Result<()> {
         }
     }
 
-    let fmin: f32 = get_env("LOOKAS_FMIN", 30.0);
-    let fmax: f32 = get_env("LOOKAS_FMAX", 16_000.0);
-    let target_fps_ms: u64 = get_env("LOOKAS_TARGET_FPS_MS", 16);
-    let fft_size: usize = get_env("LOOKAS_FFT_SIZE", 2048);
-    let tau_spec: f32 = get_env("LOOKAS_TAU_SPEC", 0.06);
-    let gate_db: f32 = get_env("LOOKAS_GATE_DB", -55.0);
-    let tilt_alpha: f32 = get_env("LOOKAS_TILT_ALPHA", 0.30);
-    let flow_k: f32 = get_env("LOOKAS_FLOW_K", 0.18);
-    let spr_k: f32 = get_env("LOOKAS_SPR_K", 60.0);
-    let spr_zeta: f32 = get_env("LOOKAS_SPR_ZETA", 1.0);
+    let fmin: f32 = get_env("VISYX_FMIN", 30.0);
+    let fmax: f32 = get_env("VISYX_FMAX", 16_000.0);
+    let target_fps_ms: u64 = get_env("VISYX_TARGET_FPS_MS", 16);
+    let fft_size: usize = get_env("VISYX_FFT_SIZE", 2048);
+    let tau_spec: f32 = get_env("VISYX_TAU_SPEC", 0.06);
+    let gate_db: f32 = get_env("VISYX_GATE_DB", -55.0);
+    let tilt_alpha: f32 = get_env("VISYX_TILT_ALPHA", 0.30);
+    let flow_k: f32 = get_env("VISYX_FLOW_K", 0.18);
+    let spr_k: f32 = get_env("VISYX_SPR_K", 60.0);
+    let spr_zeta: f32 = get_env("VISYX_SPR_ZETA", 1.0);
 
-    let show_hud: bool = get_env("LOOKAS_HUD", 0u8) != 0;
+    let show_hud: bool = get_env("VISYX_HUD", 0u8) != 0;
     let top_pad: u16 = if show_hud { 1 } else { 0 };
 
     let mut out = stdout();
@@ -228,7 +228,7 @@ fn main() -> Result<()> {
 
         if show_hud {
             header.clear();
-            header.push_str("  lookas  |  input: ");
+            header.push_str("  visyx  |  input: ");
             header.push_str(&name);
             header.push_str("  |  orient: ");
             header.push_str(match orient {
