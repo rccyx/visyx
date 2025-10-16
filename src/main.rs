@@ -21,8 +21,7 @@ use visyx::{
     dsp::{hann, prepare_fft_input_inplace},
     filterbank::build_filterbank,
     render::{
-        draw_blocks_horizontal, draw_blocks_vertical, layout_for,
-        Mode, Orient,
+        draw_blocks_vertical, layout_for,
     },
     utils::scopeguard,
 };
@@ -35,17 +34,6 @@ fn get_env<T: std::str::FromStr>(name: &str, default: T) -> T {
     }
 }
 
-fn mode_from_env() -> Mode {
-    let s = env::var("VISYX_MODE")
-        .or_else(|_| env::var("VISYX_HORZ_MODE"))
-        .or_else(|_| env::var("VISYX_VERT_MODE"))
-        .unwrap_or_else(|_| "rows".into())
-        .to_lowercase();
-    match s.as_str() {
-        "columns" | "cols" | "c" => Mode::Columns,
-        _ => Mode::Rows,
-    }
-}
 
 fn main() -> Result<()> {
     #[cfg(unix)]
@@ -132,8 +120,6 @@ fn main() -> Result<()> {
     let mut last = Instant::now();
     let target_dt = Duration::from_millis(target_fps_ms);
     let mut analyzer = SpectrumAnalyzer::new(half);
-    let mut orient = Orient::Vertical;
-    let mode = mode_from_env();
 
     let mut buf = Vec::with_capacity(fft_size);
     let mut spec_pow = vec![0.0; half];
@@ -147,8 +133,6 @@ fn main() -> Result<()> {
                 use crossterm::event::KeyCode::*;
                 match k.code {
                     Char('q') => return Ok(()),
-                    Char('v') => orient = Orient::Vertical,
-                    Char('h') => orient = Orient::Horizontal,
                     _ => {}
                 }
             }
@@ -164,7 +148,7 @@ fn main() -> Result<()> {
         last = now;
 
         let (w, h) = terminal::size()?;
-        let lay = layout_for(w, h, orient, mode, top_pad);
+        let lay = layout_for(w, top_pad);
         let desired_bars = lay.bars;
 
         if analyzer.filters.len() != desired_bars {
@@ -230,16 +214,6 @@ fn main() -> Result<()> {
             header.clear();
             header.push_str("  visyx  |  input: ");
             header.push_str(&name);
-            header.push_str("  |  orient: ");
-            header.push_str(match orient {
-                Orient::Vertical => "vertical",
-                Orient::Horizontal => "horizontal",
-            });
-            header.push_str("  |  mode: ");
-            header.push_str(match mode {
-                Mode::Rows => "rows",
-                Mode::Columns => "columns",
-            });
             header.push_str("  |  auto gain [");
             use std::fmt::Write;
             let _ = write!(
@@ -248,26 +222,16 @@ fn main() -> Result<()> {
                 analyzer.db_low - 3.0,
                 analyzer.db_high + 6.0
             );
-            header.push_str("]  |  v/h to switch, q quits\n");
+            header.push_str("]  |  q quits\n");
             out.write_all(header.as_bytes())?;
         }
 
-        match orient {
-            Orient::Vertical => draw_blocks_vertical(
-                &mut out,
-                &analyzer.bars_y,
-                w,
-                h,
-                &lay,
-            )?,
-            Orient::Horizontal => draw_blocks_horizontal(
-                &mut out,
-                &analyzer.bars_y,
-                w,
-                h,
-                &lay,
-                mode,
-            )?,
-        }
+        draw_blocks_vertical(
+            &mut out,
+            &analyzer.bars_y,
+            w,
+            h,
+            &lay,
+        )?;
     }
 }

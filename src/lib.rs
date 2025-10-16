@@ -15,6 +15,6 @@ pub use dsp::{
 };
 pub use filterbank::{build_filterbank, Tri};
 pub use render::{
-    draw_bars, draw_blocks_horizontal, draw_blocks_vertical,
-    layout_for, Layout, Mode, Orient,
+    draw_blocks_vertical,
+    layout_for, Layout,
 };

@@ -39,8 +39,6 @@ visyx
 
 **Controls:**
 
-- `h` - Switch to horizontal orientation
-- `v` - Switch to vertical orientation
 - `q` - Quit the application
 
 ## Configuration
