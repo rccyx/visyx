@@ -9,8 +9,6 @@ const VBLOCKS: [char; 9] =
 const BAR_W: usize = 2;
 const GAP_W: usize = 1;
 
-
-
 pub struct Layout {
     pub bars: usize, // analyzer resolution (bands)
     pub left_pad: u16,
@@ -19,10 +17,7 @@ pub struct Layout {
 }
 
 #[inline]
-pub fn layout_for(
-    w: u16,
-    top_pad: u16,
-) -> Layout {
+pub fn layout_for(w: u16, top_pad: u16) -> Layout {
     let left_pad = 1u16;
     let right_pad = 2u16;
     let usable_cols = w.saturating_sub(left_pad + right_pad);
@@ -62,7 +57,6 @@ fn write_spaces(
     }
     Ok(())
 }
-
 
 // vertical with vblocks
 

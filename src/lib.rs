@@ -14,7 +14,4 @@ pub use dsp::{
     prepare_fft_input_inplace,
 };
 pub use filterbank::{build_filterbank, Tri};
-pub use render::{
-    draw_blocks_vertical,
-    layout_for, Layout,
-};
+pub use render::{draw_blocks_vertical, layout_for, Layout};

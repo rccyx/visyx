@@ -20,9 +20,7 @@ use visyx::{
     buffer::SharedBuf,
     dsp::{hann, prepare_fft_input_inplace},
     filterbank::build_filterbank,
-    render::{
-        draw_blocks_vertical, layout_for,
-    },
+    render::{draw_blocks_vertical, layout_for},
     utils::scopeguard,
 };
 
@@ -33,7 +31,6 @@ fn get_env<T: std::str::FromStr>(name: &str, default: T) -> T {
         Err(_) => default,
     }
 }
-
 
 fn main() -> Result<()> {
     #[cfg(unix)]
@@ -131,9 +128,8 @@ fn main() -> Result<()> {
                 crossterm::event::read()?
             {
                 use crossterm::event::KeyCode::*;
-                match k.code {
-                    Char('q') => return Ok(()),
-                    _ => {}
+                if let Char('q') = k.code {
+                    return Ok(());
                 }
             }
         }
@@ -226,12 +222,6 @@ fn main() -> Result<()> {
             out.write_all(header.as_bytes())?;
         }
 
-        draw_blocks_vertical(
-            &mut out,
-            &analyzer.bars_y,
-            w,
-            h,
-            &lay,
-        )?;
+        draw_blocks_vertical(&mut out, &analyzer.bars_y, w, h, &lay)?;
     }
 }
